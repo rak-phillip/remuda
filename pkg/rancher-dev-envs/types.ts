@@ -41,6 +41,8 @@ export interface ClusterDefaults {
   ingressClass: string;
   storageClass?: string;
   clusterIssuer?: string;
+  /** False only when the cluster genuinely has no StorageClass, not when the lookup failed. */
+  hasStorageClass?: boolean;
   /** Chosen to not overlap the host cluster's own CIDRs. */
   nestedPodCidr: string;
   nestedServiceCidr: string;

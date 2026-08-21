@@ -2,10 +2,11 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useStore } from 'vuex';
 import { useRoute, useRouter } from 'vue-router';
-import { useI18n } from '@shell/composables/useI18n';
 import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
+import { useText } from '../utils/i18n';
+import ConfirmDelete from '../components/ConfirmDelete.vue';
 import {
   deleteEnvironment, list, readEnvironments, rebuildUi, resourceUrl
 } from '../utils/api';
@@ -16,7 +17,7 @@ import type { DevEnvSpec } from '../types';
 const store = useStore();
 const route = useRoute();
 const router = useRouter();
-const i18n = useI18n(store);
+const i18n = useText(store);
 
 const clusterId = route.params.clusterId as string;
 const envName = route.params.name as string;
@@ -28,6 +29,7 @@ const password = ref('');
 const revealed = ref(false);
 const backendReady = ref(false);
 const jobs = ref<any[]>([]);
+const confirmDelete = ref<any>(null);
 let timer: any = null;
 
 const url = computed(() => (spec.value ? environmentUrl(spec.value) : ''));
@@ -207,16 +209,30 @@ onUnmounted(() => clearInterval(timer));
       </p>
 
       <div class="dev-env-actions">
+        <!--
+          AsyncButton has no `label` prop -- it takes a label per phase, and
+          otherwise falls back to asyncButton.<mode>.<phase>. Passing `label`
+          did nothing, so this button read "Apply" on a page where that means
+          nothing to anyone.
+        -->
         <AsyncButton
           mode="apply"
-          :label="i18n.t('devEnvs.detail.rebuild')"
+          :action-label="i18n.t('devEnvs.detail.rebuild')"
+          :waiting-label="i18n.t('devEnvs.detail.rebuilding')"
+          :success-label="i18n.t('devEnvs.detail.rebuild')"
           @click="rebuild"
         />
         <AsyncButton
           mode="delete"
-          @click="remove"
+          @click="(cb) => { cb(true); confirmDelete?.show(); }"
         />
       </div>
+
+      <ConfirmDelete
+        ref="confirmDelete"
+        :name="spec.name"
+        @confirm="remove"
+      />
     </template>
   </div>
 </template>

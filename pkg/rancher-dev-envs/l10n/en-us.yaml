@@ -69,11 +69,23 @@ devEnvs:
     buildLogHint: Build logs are on the build job's pod in the target cluster.
     peek: Debug proxy
 
+  confirmDelete:
+    title: Delete {name}?
+    body: >-
+      This removes the environment's Rancher instance, its nginx deployment, its
+      build job and all three of its volumes. Anything only stored inside the
+      environment is lost, and it cannot be undone.
+    cancel: Cancel
+
   warning:
     localCluster: >-
       This targets the local management cluster, which already runs this Rancher.
       A dev environment here competes for the same node's CPU, memory and disk.
       Prefer a downstream cluster where one is available.
+    noStorageClass: >-
+      This cluster has no StorageClass, so the environment's volumes can never be
+      bound and the build will not start. Add a StorageClass to the cluster, or
+      name one to use under Show Advanced.
     noIssuer: >-
       No cert-manager ClusterIssuer was found on this cluster, so the environment
       will be created without TLS and browsers will warn on every visit.

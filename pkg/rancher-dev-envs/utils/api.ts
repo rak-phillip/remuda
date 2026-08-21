@@ -1,4 +1,4 @@
-import { DEV_ENV_NS, ENDPOINTS, LABEL_NAME } from './constants';
+import { CONFIG_MAP_NAME, DEV_ENV_NS, ENDPOINTS, LABEL_NAME } from './constants';
 import { allManifests, buildJobManifest, namespaceManifest } from './manifests';
 import type { DevEnvSpec, ManifestRequest } from '../types';
 
@@ -110,6 +110,15 @@ export async function deleteEnvironment(store: any, clusterId: string, spec: Dev
     const res = await list(store, clusterId, endpoint, spec.namespace);
 
     for (const obj of res?.data || []) {
+      // dev-envs-config holds the whole cluster's discovered defaults and is
+      // shared by every environment, so it is never one environment's to
+      // delete. It carries no owner label today, which would be enough on its
+      // own -- this is belt and braces, because losing it silently breaks
+      // prefill for everyone on the cluster.
+      if (obj.metadata?.name === CONFIG_MAP_NAME) {
+        continue;
+      }
+
       if (obj.metadata?.labels?.[LABEL_NAME] === spec.name) {
         await remove(store, clusterId, endpoint, spec.namespace, obj.metadata.name);
       }

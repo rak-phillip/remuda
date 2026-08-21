@@ -188,7 +188,18 @@ async function firstIngressClass(store: any, clusterId: string): Promise<string>
   }
 }
 
-async function defaultStorageClass(store: any, clusterId: string): Promise<string | undefined> {
+/**
+ * What storage the cluster can actually provision.
+ *
+ * `found` is reported separately from `preferred` because the two mean very
+ * different things. A cluster with no StorageClass at all cannot bind any of an
+ * environment's three PVCs, so the build pod never schedules -- it fails with
+ * "pod has unbound immediate PersistentVolumeClaims" some minutes later, which
+ * is a miserable way to find out. `found: false` is what lets the create form
+ * say so up front, and it is deliberately distinct from a *failed lookup*, which
+ * should not block anyone.
+ */
+async function storageClasses(store: any, clusterId: string): Promise<{ found: boolean; preferred?: string }> {
   try {
     const res = await store.dispatch('management/request', { url: `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.storageclass }` });
     const classes = res?.data || [];
@@ -196,10 +207,15 @@ async function defaultStorageClass(store: any, clusterId: string): Promise<strin
       (c: any) => c.metadata?.annotations?.['storageclass.kubernetes.io/is-default-class'] === 'true'
     );
 
-    // Undefined rather than '' so the PVC omits the key entirely.
-    return marked?.metadata?.name || classes[0]?.metadata?.name || undefined;
+    return {
+      found:     classes.length > 0,
+      // Undefined rather than '' so the PVC omits the key entirely.
+      preferred: marked?.metadata?.name || classes[0]?.metadata?.name || undefined,
+    };
   } catch {
-    return undefined;
+    // Could not tell. Assume the cluster is fine rather than block on a lookup
+    // the user may simply lack permission for.
+    return { found: true };
   }
 }
 
@@ -226,28 +242,47 @@ async function savedDefaults(store: any, clusterId: string): Promise<Partial<Clu
 }
 
 export async function discoverDefaults(store: any, clusterId: string): Promise<ClusterDefaults> {
-  const [url, version, ingressClass, storageClass, clusterIssuer, nested, saved] = await Promise.all([
+  const [url, version, ingressClass, storage, clusterIssuer, nested, saved] = await Promise.all([
     serverUrl(store),
     serverVersion(store),
     firstIngressClass(store, clusterId),
-    defaultStorageClass(store, clusterId),
+    storageClasses(store, clusterId),
     firstClusterIssuer(store, clusterId),
     hostCidrs(store, clusterId),
     savedDefaults(store, clusterId),
   ]);
 
   return {
-    baseDomain:    baseDomainFromServerUrl(url),
-    serverVersion: version,
+    baseDomain:      baseDomainFromServerUrl(url),
+    serverVersion:   version,
     ingressClass,
-    storageClass,
+    storageClass:    storage.preferred,
     clusterIssuer,
     ...nested,
     ...saved,
+    // After `saved` on purpose: this describes the cluster as it is right now,
+    // and a stale persisted value must never mask a cluster that has since lost
+    // its storage.
+    hasStorageClass: storage.found,
   };
 }
 
+/**
+ * Persist this cluster's defaults so the next create prefills.
+ *
+ * The ConfigMap is shared by every environment on the cluster, so this is an
+ * upsert, and it has to read before it writes: Steve rejects an update that
+ * carries no resourceVersion with "metadata.resourceVersion is required for
+ * update". An earlier version PUT without one and fell back to POST on failure,
+ * which meant the PUT *always* failed and the POST then always returned
+ * `configmaps "dev-envs-config" already exists` -- so every create after the
+ * first one on a given cluster reported an error.
+ *
+ * Reading first also makes the write a compare-and-swap rather than a blind
+ * overwrite, so two people creating at once cannot silently clobber each other.
+ */
 export async function saveDefaults(store: any, clusterId: string, defaults: ClusterDefaults): Promise<void> {
+  const url = `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.configmap }/${ DEV_ENV_NS }/${ CONFIG_MAP_NAME }`;
   const body = {
     apiVersion: 'v1',
     kind:       'ConfigMap',
@@ -255,13 +290,26 @@ export async function saveDefaults(store: any, clusterId: string, defaults: Clus
     data:       { defaults: JSON.stringify(defaults, null, 2) },
   };
 
+  let existing: any;
+
   try {
-    await store.dispatch('management/request', {
-      url:    `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.configmap }/${ DEV_ENV_NS }/${ CONFIG_MAP_NAME }`,
-      method: 'PUT',
-      data:   body,
-    });
+    existing = await store.dispatch('management/request', { url });
   } catch {
-    await create(store, clusterId, { endpoint: ENDPOINTS.configmap, body });
+    existing = undefined;
   }
+
+  if (!existing) {
+    await create(store, clusterId, { endpoint: ENDPOINTS.configmap, body });
+
+    return;
+  }
+
+  await store.dispatch('management/request', {
+    url,
+    method: 'PUT',
+    data:   {
+      ...body,
+      metadata: { ...body.metadata, resourceVersion: existing.metadata?.resourceVersion },
+    },
+  });
 }

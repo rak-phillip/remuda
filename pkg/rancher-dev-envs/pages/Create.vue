@@ -2,13 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useStore } from 'vuex';
 import { useRouter } from 'vue-router';
-import { useI18n } from '@shell/composables/useI18n';
 import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
 import AdvancedSection from '@shell/components/AdvancedSection.vue';
 import LabeledInput from '@components/Form/LabeledInput/LabeledInput.vue';
 import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
+import { useText } from '../utils/i18n';
 import { createEnvironment, readyClusters } from '../utils/api';
 import { backendImageForBranch, discoverDefaults, hostnameFor, saveDefaults } from '../utils/discovery';
 import {
@@ -19,7 +19,7 @@ import type { DevEnvSpec } from '../types';
 
 const store = useStore();
 const router = useRouter();
-const i18n = useI18n(store);
+const i18n = useText(store);
 
 const loading = ref(true);
 const error = ref('');
@@ -38,6 +38,7 @@ const serverVersion = ref('');
 const ingressClass = ref('');
 const storageClass = ref('');
 const clusterIssuer = ref('');
+const hasStorageClass = ref(true);
 
 // Chosen against the host cluster's own ranges when defaults are discovered.
 const nestedPodCidr = ref(DEFAULT_NESTED_POD_CIDR);
@@ -51,8 +52,17 @@ const clusterOptions = computed(() => clusters.value.map((c) => ({ label: c.name
 const targetsLocal = computed(() => clusters.value.find((c) => c.id === clusterId.value)?.isLocal);
 const hostname = computed(() => (name.value && baseDomain.value ? hostnameFor(name.value, baseDomain.value) : ''));
 
+/**
+ * No StorageClass means none of the three PVCs can ever bind, so the build pod
+ * never schedules and the environment fails several minutes in with "pod has
+ * unbound immediate PersistentVolumeClaims". Typing a class by hand is still
+ * allowed -- the check is for a cluster that offers nothing at all.
+ */
+const storageUnavailable = computed(() => !hasStorageClass.value && !storageClass.value);
+
 const canSubmit = computed(() => !!(
-  clusterId.value && name.value && repo.value && branch.value && baseDomain.value && ingressClass.value
+  clusterId.value && name.value && repo.value && branch.value && baseDomain.value &&
+  ingressClass.value && !storageUnavailable.value
 ));
 
 // Follow the branch until the user edits the image themselves.
@@ -74,6 +84,7 @@ async function loadDefaults() {
   ingressClass.value = defaults.ingressClass;
   storageClass.value = defaults.storageClass || '';
   clusterIssuer.value = defaults.clusterIssuer || '';
+  hasStorageClass.value = defaults.hasStorageClass !== false;
   nestedPodCidr.value = defaults.nestedPodCidr || DEFAULT_NESTED_POD_CIDR;
   nestedServiceCidr.value = defaults.nestedServiceCidr || DEFAULT_NESTED_SERVICE_CIDR;
 
@@ -120,7 +131,21 @@ function generatePassword(): string {
 async function submit(cb: (ok: boolean) => void) {
   try {
     await createEnvironment(store, clusterId.value, buildSpec(), generatePassword());
-    // Persist what was used so the next create on this cluster prefills.
+    // Persist what was used so the next create on this cluster prefills. The
+    // environment already exists by this point, so a failure here must not be
+    // reported as a failed create -- prefill is a convenience, not part of the
+    // environment.
+    await savePrefillDefaults();
+    cb(true);
+    router.push({ name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } });
+  } catch (e: any) {
+    error.value = e?.message || i18n.t('devEnvs.error.createFailed');
+    cb(false);
+  }
+}
+
+async function savePrefillDefaults() {
+  try {
     await saveDefaults(store, clusterId.value, {
       baseDomain:    baseDomain.value,
       ingressClass:  ingressClass.value,
@@ -130,11 +155,8 @@ async function submit(cb: (ok: boolean) => void) {
       nestedPodCidr:     nestedPodCidr.value,
       nestedServiceCidr: nestedServiceCidr.value,
     });
-    cb(true);
-    router.push({ name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } });
-  } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.createFailed');
-    cb(false);
+  } catch {
+    // Deliberately swallowed -- see the call site.
   }
 }
 
@@ -166,6 +188,11 @@ onMounted(async() => {
       v-if="targetsLocal"
       color="warning"
       :label="i18n.t('devEnvs.warning.localCluster')"
+    />
+    <Banner
+      v-if="storageUnavailable"
+      color="error"
+      :label="i18n.t('devEnvs.warning.noStorageClass')"
     />
     <Banner
       v-if="!clusterIssuer"
@@ -295,17 +322,27 @@ onMounted(async() => {
       </div>
     </AdvancedSection>
 
-    <AsyncButton
-      mode="create"
-      :disabled="!canSubmit"
-      :label="i18n.t('devEnvs.create.submit')"
-      @click="submit"
-    />
+    <div class="dev-env-footer">
+      <AsyncButton
+        mode="create"
+        :disabled="!canSubmit"
+        :action-label="i18n.t('devEnvs.create.submit')"
+        @click="submit"
+      />
+    </div>
   </div>
 </template>
 
 <style lang="scss" scoped>
 h3 {
   margin-bottom: 10px;
+}
+
+// Matches the other create forms: the action sits right, at its natural width,
+// rather than stretching the full width of the page.
+.dev-env-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
 }
 </style>

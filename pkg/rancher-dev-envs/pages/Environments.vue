@@ -2,10 +2,11 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useStore } from 'vuex';
 import { useRouter } from 'vue-router';
-import { useI18n } from '@shell/composables/useI18n';
 import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
+import { useText } from '../utils/i18n';
+import ConfirmDelete from '../components/ConfirmDelete.vue';
 import { deleteEnvironment, list, readEnvironments, readyClusters } from '../utils/api';
 import { environmentUrl } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
@@ -13,7 +14,9 @@ import type { BuildState, DevEnvSummary } from '../types';
 
 const store = useStore();
 const router = useRouter();
-const i18n = useI18n(store);
+const i18n = useText(store);
+const confirmDelete = ref<any>(null);
+const pendingDelete = ref<DevEnvSummary | null>(null);
 
 const loading = ref(true);
 const error = ref('');
@@ -76,6 +79,23 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function askDelete(row: DevEnvSummary) {
+  pendingDelete.value = row;
+  confirmDelete.value?.show();
+}
+
+function confirmRemove(cb: (ok: boolean) => void) {
+  const row = pendingDelete.value;
+
+  if (!row) {
+    cb(false);
+
+    return;
+  }
+
+  remove(row, cb);
 }
 
 async function remove(row: DevEnvSummary, cb: (ok: boolean) => void) {
@@ -184,12 +204,18 @@ onUnmounted(() => clearInterval(timer));
             <AsyncButton
               mode="delete"
               size="sm"
-              @click="(cb) => remove(row, cb)"
+              @click="(cb) => { cb(true); askDelete(row); }"
             />
           </td>
         </tr>
       </tbody>
     </table>
+
+    <ConfirmDelete
+      ref="confirmDelete"
+      :name="pendingDelete?.spec?.name || ''"
+      @confirm="confirmRemove"
+    />
   </div>
 </template>
 

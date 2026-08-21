@@ -1,6 +1,6 @@
 import {
-  backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, hostnameFor, pickNestedCidrs,
-  widenToSixteen,
+  backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, discoverDefaults, hostnameFor,
+  pickNestedCidrs, saveDefaults, widenToSixteen,
 } from '../discovery';
 import { DEFAULT_BACKEND_IMAGE } from '../constants';
 
@@ -127,5 +127,111 @@ describe('pickNestedCidrs', () => {
       nestedPodCidr:     '10.44.0.0/16',
       nestedServiceCidr: '10.45.0.0/16',
     });
+  });
+});
+
+describe('saveDefaults', () => {
+  const defaults = { baseDomain: 'example.com', ingressClass: 'traefik' } as any;
+
+  function mockStore(existing: any) {
+    const calls: any[] = [];
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        calls.push(opts);
+
+        if (!opts.method) {
+          if (!existing) {
+            throw new Error('404 not found');
+          }
+
+          return existing;
+        }
+
+        return {};
+      }),
+    };
+
+    return { store, calls };
+  }
+
+  it('creates the ConfigMap when the cluster has none yet', async() => {
+    const { store, calls } = mockStore(undefined);
+
+    await saveDefaults(store, 'local', defaults);
+
+    expect(calls.some((c) => c.method === 'POST')).toBe(true);
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('updates in place when it already exists, carrying resourceVersion', async() => {
+    // Steve rejects an update without one: "metadata.resourceVersion is
+    // required for update". The old code PUT without it, always failed, then
+    // POSTed and got `configmaps "dev-envs-config" already exists` -- so every
+    // create after the first on a cluster surfaced an error.
+    const { store, calls } = mockStore({ metadata: { resourceVersion: '80357' } });
+
+    await saveDefaults(store, 'local', defaults);
+
+    const put = calls.find((c) => c.method === 'PUT');
+
+    expect(put).toBeDefined();
+    expect(put.data.metadata.resourceVersion).toBe('80357');
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('does not fall back to POST when the object exists', async() => {
+    const { store, calls } = mockStore({ metadata: { resourceVersion: '1' } });
+
+    await saveDefaults(store, 'local', defaults);
+
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+  });
+});
+
+describe('discoverDefaults storage detection', () => {
+  function storeWith(storageRows: any) {
+    return {
+      dispatch: jest.fn(async(action: string, opts: any) => {
+        if (action === 'management/find') {
+          return { value: '' };
+        }
+
+        if (opts?.url?.includes('storageclasses')) {
+          if (storageRows === 'error') {
+            throw new Error('forbidden');
+          }
+
+          return { data: storageRows };
+        }
+
+        return { data: [] };
+      }),
+    };
+  }
+
+  it('flags a cluster that has no StorageClass at all', async() => {
+    const out = await discoverDefaults(storeWith([]), 'c-m-abc');
+
+    expect(out.hasStorageClass).toBe(false);
+    expect(out.storageClass).toBeUndefined();
+  });
+
+  it('prefers the class marked default', async() => {
+    const rows = [
+      { metadata: { name: 'slow' } },
+      { metadata: { name: 'fast', annotations: { 'storageclass.kubernetes.io/is-default-class': 'true' } } },
+    ];
+    const out = await discoverDefaults(storeWith(rows), 'c-m-abc');
+
+    expect(out.hasStorageClass).toBe(true);
+    expect(out.storageClass).toBe('fast');
+  });
+
+  it('does not block when the lookup itself fails', async() => {
+    // A user without permission to list StorageClasses should not be told the
+    // cluster has no storage.
+    const out = await discoverDefaults(storeWith('error'), 'c-m-abc');
+
+    expect(out.hasStorageClass).toBe(true);
   });
 });
