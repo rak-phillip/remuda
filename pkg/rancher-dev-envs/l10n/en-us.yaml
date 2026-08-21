@@ -1,0 +1,88 @@
+product:
+  dev-envs: Dev Environments
+
+devEnvs:
+  nav:
+    environments: Environments
+    create: Create
+
+  list:
+    title: Dev Environments
+    subtitle: Rancher instances running a dashboard branch, for QA and design review.
+    empty: No dev environments yet.
+    createAction: Create
+    columns:
+      name: Name
+      cluster: Cluster
+      branch: Branch
+      owner: Owner
+      backend: Backend
+      build: UI build
+      url: URL
+      age: Age
+
+  state:
+    building: Building
+    ready: Ready
+    failed: Failed
+    unknown: Unknown
+    pending: Pending
+
+  create:
+    title: Create Dev Environment
+    nameLabel: Name
+    namePlaceholder: multi-idp
+    nameHint: Used as the subdomain and as the name of every object created.
+    clusterLabel: Target cluster
+    repoLabel: Repository
+    repoPlaceholder: https://github.com/rak-phillip/dashboard
+    branchLabel: Branch
+    branchPlaceholder: task/17295-multi-idp
+    gitSecretLabel: Git token secret
+    gitSecretHint: Only needed for a private fork. Secret must hold a "token" key.
+    backendLabel: Rancher server image
+    backendHint: Derived from the branch when it names a release line, otherwise head.
+    hostnameLabel: Hostname
+    sizes: Volume sizes (GiB)
+    dataSize: Rancher data
+    uiSize: UI bundle
+    cacheSize: Build cache
+    clusterConfig: Cluster configuration
+    baseDomain: Base domain
+    baseDomainHint: Requires a wildcard DNS record pointing at this cluster's ingress.
+    ingressClass: Ingress class
+    storageClass: Storage class
+    clusterIssuer: cert-manager ClusterIssuer
+    submit: Create
+    creating: Creating
+
+  detail:
+    title: Dev Environment
+    access: Access
+    url: URL
+    password: Bootstrap password
+    source: Source
+    backendImage: Backend image
+    rebuild: Rebuild UI
+    rebuilding: Rebuilding
+    delete: Delete
+    buildLogHint: Build logs are on the build job's pod in the target cluster.
+    peek: Debug proxy
+
+  warning:
+    localCluster: >-
+      This targets the local management cluster, which already runs this Rancher.
+      A dev environment here competes for the same node's CPU, memory and disk.
+      Prefer a downstream cluster where one is available.
+    noIssuer: >-
+      No cert-manager ClusterIssuer was found on this cluster, so the environment
+      will be created without TLS and browsers will warn on every visit.
+    noBaseDomain: >-
+      No base domain could be derived. Set one below, and make sure a wildcard DNS
+      record points at this cluster's ingress.
+
+  error:
+    createFailed: Could not create the environment
+    loadFailed: Could not load environments
+    deleteFailed: Could not delete the environment
+    rebuildFailed: Could not start the rebuild
