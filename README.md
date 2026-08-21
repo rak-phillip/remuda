@@ -62,12 +62,19 @@ Without an issuer an environment is still created, but with no TLS.
 
 ## Resource cost
 
-A build needs roughly **6-8 GiB of memory** and takes **8-15 minutes cold** (`node_modules` is
-~855 MB and the dashboard build already runs with `--max_old_space_size=4096`). A rebuild reusing the
-cache volume is faster. The Rancher backend itself is privileged and boots an embedded k3s, so it
-also takes several minutes to become ready.
+A build needs roughly **6-8 GiB of memory** (`node_modules` is ~855 MB and the dashboard build
+already runs with `--max_old_space_size=4096`).
 
-Budget accordingly: a single 8 CPU / 32 GiB node comfortably runs one build at a time.
+Measured on a single 8 CPU / 32 GiB node, cold, with no cache: **4.6 minutes** end to end for the
+build Job, of which webpack was ~2.5 minutes and the rest `yarn install`. A rebuild reusing the cache
+volume is faster.
+
+The Rancher backend is slower to be *useful* than to be *ready*: its pod reports ready in about a
+minute, but it boots an embedded k3s and restarts itself once during bootstrap, so allow several more
+minutes before `/dashboard/` serves. Expect `503 API Aggregation not ready` and then `502` in the
+meantime — those are the backend still coming up, not a problem with the bundle.
+
+One build at a time is comfortable on such a node.
 
 ## Development
 
