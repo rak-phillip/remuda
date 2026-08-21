@@ -12,7 +12,8 @@ import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
 import { createEnvironment, readyClusters } from '../utils/api';
 import { backendImageForBranch, discoverDefaults, hostnameFor, saveDefaults } from '../utils/discovery';
 import {
-  BLANK_CLUSTER, DEFAULT_CACHE_SIZE_GB, DEFAULT_DATA_SIZE_GB, DEFAULT_UI_SIZE_GB, DEV_ENV_NS, PRODUCT_NAME,
+  BLANK_CLUSTER, DEFAULT_CACHE_SIZE_GB, DEFAULT_DATA_SIZE_GB, DEFAULT_NESTED_POD_CIDR,
+  DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, DEV_ENV_NS, PRODUCT_NAME,
 } from '../utils/constants';
 import type { DevEnvSpec } from '../types';
 
@@ -33,9 +34,14 @@ const backendImage = ref('');
 const backendTouched = ref(false);
 
 const baseDomain = ref('');
+const serverVersion = ref('');
 const ingressClass = ref('');
 const storageClass = ref('');
 const clusterIssuer = ref('');
+
+// Chosen against the host cluster's own ranges when defaults are discovered.
+const nestedPodCidr = ref(DEFAULT_NESTED_POD_CIDR);
+const nestedServiceCidr = ref(DEFAULT_NESTED_SERVICE_CIDR);
 
 const dataSizeGb = ref(DEFAULT_DATA_SIZE_GB);
 const uiSizeGb = ref(DEFAULT_UI_SIZE_GB);
@@ -52,7 +58,7 @@ const canSubmit = computed(() => !!(
 // Follow the branch until the user edits the image themselves.
 watch(branch, (value) => {
   if (!backendTouched.value) {
-    backendImage.value = backendImageForBranch(value);
+    backendImage.value = backendImageForBranch(value, serverVersion.value);
   }
 });
 
@@ -64,9 +70,18 @@ async function loadDefaults() {
   const defaults = await discoverDefaults(store, clusterId.value);
 
   baseDomain.value = defaults.baseDomain;
+  serverVersion.value = defaults.serverVersion || '';
   ingressClass.value = defaults.ingressClass;
   storageClass.value = defaults.storageClass || '';
   clusterIssuer.value = defaults.clusterIssuer || '';
+  nestedPodCidr.value = defaults.nestedPodCidr || DEFAULT_NESTED_POD_CIDR;
+  nestedServiceCidr.value = defaults.nestedServiceCidr || DEFAULT_NESTED_SERVICE_CIDR;
+
+  // The version arrives asynchronously, so redo the image guess now that the
+  // main-line comparison can actually be made.
+  if (!backendTouched.value) {
+    backendImage.value = backendImageForBranch(branch.value, serverVersion.value);
+  }
 }
 
 watch(clusterId, loadDefaults);
@@ -88,6 +103,9 @@ function buildSpec(): DevEnvSpec {
     dataSizeGb:    Number(dataSizeGb.value),
     uiSizeGb:      Number(uiSizeGb.value),
     cacheSizeGb:   Number(cacheSizeGb.value),
+
+    nestedPodCidr:     nestedPodCidr.value,
+    nestedServiceCidr: nestedServiceCidr.value,
   };
 }
 
@@ -108,6 +126,9 @@ async function submit(cb: (ok: boolean) => void) {
       ingressClass:  ingressClass.value,
       storageClass:  storageClass.value || undefined,
       clusterIssuer: clusterIssuer.value || undefined,
+
+      nestedPodCidr:     nestedPodCidr.value,
+      nestedServiceCidr: nestedServiceCidr.value,
     });
     cb(true);
     router.push({ name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } });

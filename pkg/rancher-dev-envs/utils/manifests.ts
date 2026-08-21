@@ -1,6 +1,6 @@
 import {
-  DEV_ENV_NS, ENDPOINTS, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, LABEL_ROLE,
-  ROLE_BACKEND, ROLE_BUILD, ROLE_UI, UI_BUNDLE_PATH, BUILD_IMAGE, SERVE_IMAGE,
+  DEV_ENV_NS, ENDPOINTS, INOTIFY_LIMITS, K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER,
+  LABEL_ROLE, ROLE_BACKEND, ROLE_BUILD, ROLE_UI, UI_BUNDLE_PATH, BUILD_IMAGE, SERVE_IMAGE,
 } from './constants';
 import type { DevEnvSpec, ManifestRequest } from '../types';
 
@@ -86,6 +86,88 @@ export const dataPvcManifest = (spec: DevEnvSpec) => pvcManifest(spec, 'data', s
 export const uiPvcManifest = (spec: DevEnvSpec) => pvcManifest(spec, 'ui', spec.uiSizeGb, ROLE_UI);
 export const cachePvcManifest = (spec: DevEnvSpec) => pvcManifest(spec, 'cache', spec.cacheSizeGb, ROLE_BUILD);
 
+/** Name of the ConfigMap carrying the nested k3s config file. */
+export const k3sConfigName = (spec: DevEnvSpec): string => `${ spec.name }-k3s-config`;
+
+/**
+ * Config for the k3s that the backend image starts inside its own pod.
+ *
+ * Rancher launches it as a plain subprocess -- `exec.Command("k3s", "server", ...)`
+ * in norman's kwrapper -- so the k3s binary does its own CLI parsing and picks up
+ * /etc/rancher/k3s/config.yaml. Neither CIDR is passed on that command line, so
+ * the file is free to set them, and it is the only lever available: the image
+ * entrypoint sends trailing args to `rancher`, not to `k3s`.
+ *
+ * cluster-dns is pinned rather than left to k3s's derivation so the value is
+ * visible here next to the range it has to fall inside.
+ */
+export function k3sConfigManifest(spec: DevEnvSpec): ManifestRequest {
+  const config = [
+    'cluster-cidr:',
+    `  - "${ spec.nestedPodCidr }"`,
+    'service-cidr:',
+    `  - "${ spec.nestedServiceCidr }"`,
+    'cluster-dns:',
+    `  - "${ clusterDnsFor(spec.nestedServiceCidr) }"`,
+    '',
+  ].join('\n');
+
+  return {
+    endpoint: ENDPOINTS.configmap,
+    body:     {
+      apiVersion: 'v1',
+      kind:       'ConfigMap',
+      metadata:   meta(spec, k3sConfigName(spec), ROLE_BACKEND),
+      data:       { 'config.yaml': config },
+    },
+  };
+}
+
+/** k3s puts the DNS service at the tenth address of the service range. */
+export function clusterDnsFor(serviceCidr: string): string {
+  const [base] = serviceCidr.split('/');
+  const octets = base.split('.');
+
+  return [octets[0], octets[1], octets[2], '10'].join('.');
+}
+
+/**
+ * Raise the node's inotify limits before the backend starts.
+ *
+ * These are not namespaced sysctls, so securityContext.sysctls cannot set them
+ * and each environment has to widen the shared host budget itself. Writing
+ * through /proc/sys from a privileged container is the only lever a workload
+ * has; the container is already privileged for the nested k3s, so this asks for
+ * nothing extra.
+ *
+ * Best-effort on purpose -- a node that already has generous limits, or one
+ * with a read-only /proc/sys, should not stop an environment from starting. The
+ * values are echoed so the init container's log says what actually took effect.
+ */
+export function inotifyInitContainer(spec: DevEnvSpec) {
+  const writes = Object.entries(INOTIFY_LIMITS)
+    .map(([key, value]) => {
+      const path = `/proc/sys/${ key.replace(/\./g, '/') }`;
+
+      return `echo ${ value } > ${ path } 2>/dev/null || echo "could not raise ${ key }"`;
+    })
+    .join('; ');
+
+  const reads = Object.keys(INOTIFY_LIMITS)
+    .map((key) => `echo "${ key }=$(cat /proc/sys/${ key.replace(/\./g, '/') })"`)
+    .join('; ');
+
+  return {
+    name:            'raise-inotify-limits',
+    // The backend image, so this costs no additional pull.
+    image:           spec.backendImage,
+    imagePullPolicy: 'IfNotPresent',
+    command:         ['sh', '-c', `${ writes }; ${ reads }`],
+    securityContext: { privileged: true },
+    resources:       { requests: { cpu: '10m', memory: '16Mi' } },
+  };
+}
+
 export function backendDeploymentManifest(spec: DevEnvSpec): ManifestRequest {
   const selector = { [LABEL_NAME]: spec.name, [LABEL_ROLE]: ROLE_BACKEND };
 
@@ -107,6 +189,17 @@ export function backendDeploymentManifest(spec: DevEnvSpec): ManifestRequest {
             // service account token is mounted. Without this it can try to drive
             // the HOST cluster instead of starting its own k3s.
             automountServiceAccountToken: false,
+            // dnsPolicy is deliberately left at the ClusterFirst default.
+            //
+            // An earlier workaround set it to 'Default' because the container
+            // could not use the host CoreDNS -- but that was a symptom of the
+            // CIDR collision, which made 10.43.0.10 ambiguous between the host
+            // and nested clusters. With the CIDRs separated the host CoreDNS is
+            // unambiguous again, and ClusterFirst is what lets this pod resolve
+            // the UI Service that CATTLE_UI_DASHBOARD_INDEX points at. Setting
+            // 'Default' here gives the node's resolvers, under which
+            // *.svc.cluster.local does not resolve at all.
+            initContainers:               [inotifyInitContainer(spec)],
             containers:                   [{
               name:            'rancher',
               image:           spec.backendImage,
@@ -122,13 +215,23 @@ export function backendDeploymentManifest(spec: DevEnvSpec): ManifestRequest {
                   valueFrom: { secretKeyRef: { name: `${ spec.name }-bootstrap`, key: 'password' } },
                 },
               ],
-              volumeMounts: [{ name: 'data', mountPath: '/var/lib/rancher' }],
-              resources:    {
+              volumeMounts: [
+                { name: 'data', mountPath: '/var/lib/rancher' },
+                // subPath so k3s keeps a writable /etc/rancher/k3s to drop its
+                // generated kubeconfig into.
+                {
+                  name: 'k3s-config', mountPath: K3S_CONFIG_PATH, subPath: 'config.yaml',
+                },
+              ],
+              resources: {
                 requests: { cpu: '1', memory: '3Gi' },
                 limits:   { cpu: '2', memory: '6Gi' },
               },
             }],
-            volumes: [{ name: 'data', persistentVolumeClaim: { claimName: `${ spec.name }-data` } }],
+            volumes: [
+              { name: 'data', persistentVolumeClaim: { claimName: `${ spec.name }-data` } },
+              { name: 'k3s-config', configMap: { name: k3sConfigName(spec) } },
+            ],
           },
         },
       },
@@ -337,6 +440,7 @@ export function allManifests(spec: DevEnvSpec, password: string, buildId: string
   return [
     recordManifest(spec),
     bootstrapSecretManifest(spec, password),
+    k3sConfigManifest(spec),
     dataPvcManifest(spec),
     uiPvcManifest(spec),
     cachePvcManifest(spec),

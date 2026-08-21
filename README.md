@@ -34,6 +34,63 @@ The index is fetched **server-side** by the Rancher pod, so it points at the in-
 The assets are fetched by the **browser**, so they point at the public host. Each URL is only used
 where it is reachable.
 
+## Running Rancher inside Kubernetes
+
+The backend image is the single-container Rancher, which starts its own k3s in the pod. Two things
+about that are not obvious, and between them they are why an environment would come up and then
+never become usable. Both are handled in `utils/manifests.ts`; this is the record of why.
+
+### The nested k3s needs its own CIDRs
+
+Embedded k3s defaults to podCIDR `10.42.0.0/16` and serviceCIDR `10.43.0.0/16` -- the same defaults
+the host k3s is almost certainly using. Both clusters' routes and iptables rules then live in the
+pod's single network namespace, and the nested pods cannot reach their own CoreDNS. From there:
+system charts never install, the `remotedialer-proxy` chart never brings up `app=api-extension`,
+`Service/imperative-api-extension` has no endpoints, and steve answers every request with
+`503 API Aggregation not ready` until Rancher gives up and fatals.
+
+Plain `docker run` never shows this, because Docker's bridge is `172.17.x.x` and nothing overlaps.
+
+The fix is a ConfigMap mounted at `/etc/rancher/k3s/config.yaml` setting non-overlapping
+`cluster-cidr` / `service-cidr` / `cluster-dns`. That file is read because Rancher launches the
+nested cluster as a **subprocess of the real k3s binary** -- `exec.Command("k3s", "server", ...)` in
+`rancher/norman`'s `pkg/kwrapper/k8s/k3s_linux.go` -- so k3s does its own CLI parsing. It is also the
+only lever available: the image entrypoint ends with `exec catatonit -- rancher ... "${@}"`, so
+trailing args go to `rancher`, never to `k3s`.
+
+The pair is chosen at create time against the host's own ranges (`pickNestedCidrs`), so a host that
+already uses `10.44`/`10.45` gets the next candidate instead.
+
+### The node's inotify limits have to be raised
+
+`fs.inotify.max_user_instances` defaults to **128**, is counted **per-uid across the whole host**,
+and is **not a namespaced sysctl**. Every nested k3s on a node runs its own apiserver, kubelet and
+containerd, and they all draw from that one budget.
+
+When it runs out, what fails is the nested containerd's CRI plugin:
+
+```
+failed to create CRI service: failed to create cni conf monitor for default:
+failed to create fsnotify watcher: too many open files
+```
+
+The nested cluster then has **no node at all** and every pod in it sits `Pending` -- including
+CoreDNS, which makes it look like the CIDR problem above. It is worth checking the two apart:
+`kubectl get nodes` inside the pod returns `No resources found` for this one.
+
+Because the budget is host-global, this gets worse with each environment on a node, which is what
+made it present as intermittent. A pod cannot fix it with `securityContext.sysctls` -- those only
+accept namespaced sysctls -- so the backend runs a privileged init container that writes
+`/proc/sys/fs/inotify/*` directly. It is best-effort and echoes the resulting values, so
+`kubectl logs <pod> -c raise-inotify-limits` says what actually took effect.
+
+### dnsPolicy stays at ClusterFirst
+
+Setting `dnsPolicy: Default` looks tempting while the CIDRs collide, because the container then
+stops using a `10.43.0.10` that means two different things. Once the CIDRs are separated it is
+actively wrong: the node's resolvers do not resolve `*.svc.cluster.local`, which is exactly what
+`CATTLE_UI_DASHBOARD_INDEX` points at.
+
 ## Per-cluster prerequisites
 
 1. **Wildcard DNS** for the base domain, pointing at the cluster's ingress. The base domain is
@@ -69,10 +126,22 @@ Measured on a single 8 CPU / 32 GiB node, cold, with no cache: **4.6 minutes** e
 build Job, of which webpack was ~2.5 minutes and the rest `yarn install`. A rebuild reusing the cache
 volume is faster.
 
-The Rancher backend is slower to be *useful* than to be *ready*: its pod reports ready in about a
-minute, but it boots an embedded k3s and restarts itself once during bootstrap, so allow several more
-minutes before `/dashboard/` serves. Expect `503 API Aggregation not ready` and then `502` in the
-meantime — those are the backend still coming up, not a problem with the bundle.
+The Rancher backend is slower to be *useful* than to be *ready*: its pod reports ready in seconds,
+but the nested cluster still has to install its system charts. Measured cold on an 8 CPU / 32 GiB
+node: **~3m45s** from pod start to `/dashboard/` returning 200, with no restarts. Expect
+`503 API Aggregation not ready` throughout that window — that is the nested cluster still coming up,
+not a problem with the bundle.
+
+A quick way to tell a healthy start from a stuck one, from inside the backend pod:
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+kubectl get nodes                                  # local-node Ready, within ~1 min
+kubectl get apiservice v1.ext.cattle.io            # AVAILABLE True once charts land
+```
+
+`No resources found` from the first command means the nested kubelet never registered — see
+[the inotify note](#the-nodes-inotify-limits-have-to-be-raised).
 
 One build at a time is comfortable on such a node.
 
@@ -92,6 +161,9 @@ yarn build-pkg rancher-dev-envs
   chooses between embedded-k3s and in-cluster mode partly on whether a service account token is
   present, and without this it can try to drive the *host* cluster. Verify embedded-k3s startup in
   the pod logs the first time you deploy to a new cluster.
+- The init container raises a **host-wide** limit, and nothing lowers it again when the environment
+  is deleted. That is deliberate -- it is a ceiling, not an allocation -- but it does mean a node
+  keeps the raised value until it reboots.
 - The bundle volume is written by the build Job and read by nginx. With a `ReadWriteOnce` storage
   class both pods must land on the same node; this is automatic with node-local storage, but on a
   multi-node cluster with network-backed RWO storage prefer an RWX class. An nginx pod stuck

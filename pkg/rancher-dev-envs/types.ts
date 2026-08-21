@@ -23,14 +23,27 @@ export interface DevEnvSpec {
   dataSizeGb: number;
   uiSizeGb: number;
   cacheSizeGb: number;
+
+  /**
+   * CIDRs for the k3s the backend runs inside its own pod. They must not
+   * overlap the host cluster's, or the nested cluster cannot reach its own
+   * CoreDNS and never finishes installing its system charts.
+   */
+  nestedPodCidr: string;
+  nestedServiceCidr: string;
 }
 
 /** Per-cluster defaults, discovered then persisted so later creates prefill. */
 export interface ClusterDefaults {
   baseDomain: string;
+  /** Host Rancher's server-version, used to tell the main line from a branched one. */
+  serverVersion?: string;
   ingressClass: string;
   storageClass?: string;
   clusterIssuer?: string;
+  /** Chosen to not overlap the host cluster's own CIDRs. */
+  nestedPodCidr: string;
+  nestedServiceCidr: string;
 }
 
 export interface ManifestRequest {

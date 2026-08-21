@@ -1,8 +1,11 @@
 import {
-  allManifests, backendDeploymentManifest, buildJobManifest, buildScript, dashboardIndexUrl,
-  dataPvcManifest, ingressManifest, labelsFor, resourceBase, uiDeploymentManifest,
+  allManifests, backendDeploymentManifest, buildJobManifest, buildScript, clusterDnsFor,
+  dashboardIndexUrl, dataPvcManifest, ingressManifest, inotifyInitContainer, k3sConfigManifest,
+  k3sConfigName, labelsFor, resourceBase, uiDeploymentManifest,
 } from '../manifests';
-import { LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, UI_BUNDLE_PATH } from '../constants';
+import {
+  K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, UI_BUNDLE_PATH,
+} from '../constants';
 import type { DevEnvSpec } from '../../types';
 
 const spec: DevEnvSpec = {
@@ -20,6 +23,9 @@ const spec: DevEnvSpec = {
   dataSizeGb:    20,
   uiSizeGb:      2,
   cacheSizeGb:   8,
+
+  nestedPodCidr:     '10.44.0.0/16',
+  nestedServiceCidr: '10.45.0.0/16',
 };
 
 describe('labelsFor', () => {
@@ -252,5 +258,95 @@ describe('allManifests', () => {
     const record = allManifests(spec, 'hunter2', '1')[0];
 
     expect(JSON.stringify(record)).not.toContain('hunter2');
+  });
+});
+
+describe('clusterDnsFor', () => {
+  it('takes the tenth address of the service range, as k3s does', () => {
+    expect(clusterDnsFor('10.45.0.0/16')).toBe('10.45.0.10');
+    expect(clusterDnsFor('172.31.0.0/16')).toBe('172.31.0.10');
+  });
+});
+
+describe('k3sConfigManifest', () => {
+  const cm = k3sConfigManifest(spec).body;
+
+  it('sets both CIDRs and a matching cluster-dns', () => {
+    expect(cm.data['config.yaml']).toBe([
+      'cluster-cidr:',
+      '  - "10.44.0.0/16"',
+      'service-cidr:',
+      '  - "10.45.0.0/16"',
+      'cluster-dns:',
+      '  - "10.45.0.10"',
+      '',
+    ].join('\n'));
+  });
+
+  it('is named after the environment', () => {
+    expect(cm.metadata.name).toBe('multi-idp-k3s-config');
+    expect(k3sConfigName(spec)).toBe('multi-idp-k3s-config');
+  });
+});
+
+describe('backendDeploymentManifest nested k3s wiring', () => {
+  const pod = backendDeploymentManifest(spec).body.spec.template.spec;
+
+  it('mounts the config where the k3s binary looks for it, by subPath', () => {
+    const mount = pod.containers[0].volumeMounts.find((m: any) => m.mountPath === K3S_CONFIG_PATH);
+
+    // subPath matters: a whole-directory mount would make /etc/rancher/k3s
+    // read-only and k3s could not write its generated kubeconfig there.
+    expect(mount).toStrictEqual({
+      name: 'k3s-config', mountPath: K3S_CONFIG_PATH, subPath: 'config.yaml'
+    });
+    expect(pod.volumes).toContainEqual({ name: 'k3s-config', configMap: { name: 'multi-idp-k3s-config' } });
+  });
+
+  it('leaves dnsPolicy at ClusterFirst so the UI Service name resolves', () => {
+    // 'Default' would hand the pod the node's resolvers, under which the
+    // *.svc.cluster.local host in CATTLE_UI_DASHBOARD_INDEX does not resolve.
+    expect(pod.dnsPolicy).toBeUndefined();
+  });
+});
+
+describe('allManifests ordering', () => {
+  const names = allManifests(spec, 'pw', 'build-1').map((m) => m.body.metadata?.name);
+
+  it('creates the k3s ConfigMap before the Deployment that mounts it', () => {
+    expect(names.indexOf('multi-idp-k3s-config')).toBeGreaterThan(-1);
+    expect(names.indexOf('multi-idp-k3s-config')).toBeLessThan(names.lastIndexOf('multi-idp'));
+  });
+});
+
+describe('inotifyInitContainer', () => {
+  const init = inotifyInitContainer(spec);
+  const script = init.command[2];
+
+  it('writes both limits through /proc/sys, which is the only lever a pod has', () => {
+    // fs.inotify.* is not a namespaced sysctl, so securityContext.sysctls
+    // cannot set it and the write has to go through a privileged /proc/sys.
+    expect(script).toContain('> /proc/sys/fs/inotify/max_user_instances');
+    expect(script).toContain('> /proc/sys/fs/inotify/max_user_watches');
+    expect(init.securityContext).toStrictEqual({ privileged: true });
+  });
+
+  it('is best-effort, so a locked-down node still starts the environment', () => {
+    expect(script).toContain('|| echo');
+  });
+
+  it('echoes the effective values so the init log shows what took hold', () => {
+    expect(script).toContain('max_user_instances=$(cat /proc/sys/fs/inotify/max_user_instances)');
+  });
+
+  it('reuses the backend image so it costs no extra pull', () => {
+    expect(init.image).toBe(spec.backendImage);
+  });
+
+  it('is wired into the backend pod ahead of the container', () => {
+    const pod = backendDeploymentManifest(spec).body.spec.template.spec;
+
+    expect(pod.initContainers).toHaveLength(1);
+    expect(pod.initContainers[0].name).toBe('raise-inotify-limits');
   });
 });
