@@ -22,5 +22,8 @@
     "parse-tag-name": "./node_modules/@rancher/shell/scripts/extension/parse-tag-name",
     "test": "jest",
     "lint": "./node_modules/.bin/eslint --max-warnings 0 --ext .js,.ts,.vue pkg/"
+  },
+  "devDependencies": {
+    "@types/jest": "^29"
   }
 }
