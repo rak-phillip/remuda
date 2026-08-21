@@ -1,7 +1,7 @@
-import { CONFIG_MAP_NAME, DEV_ENV_NS, ENDPOINTS, LABEL_NAME } from './constants';
+import { CONFIG_MAP_NAME, REMUDA_NS, ENDPOINTS, LABEL_NAME } from './constants';
 import { allManifests, buildJobManifest, namespaceManifest } from './manifests';
 import { localPathManifests } from './storage';
-import type { DevEnvSpec, ManifestRequest } from '../types';
+import type { RemudaSpec, ManifestRequest } from '../types';
 
 const base = (clusterId: string) => `/k8s/clusters/${ clusterId }/v1`;
 
@@ -10,13 +10,13 @@ const base = (clusterId: string) => `/k8s/clusters/${ clusterId }/v1`;
  * every object -- but honours its own `filter=`. Everything therefore lives in
  * one namespace and is queried by namespace, not by label.
  */
-export function collectionUrl(clusterId: string, endpoint: string, namespace = DEV_ENV_NS): string {
+export function collectionUrl(clusterId: string, endpoint: string, namespace = REMUDA_NS): string {
   return `${ base(clusterId) }/${ endpoint }?filter=metadata.namespace=${ namespace }`;
 }
 
 export const resourceUrl = (clusterId: string, endpoint: string, namespace: string, name: string): string => `${ base(clusterId) }/${ endpoint }/${ namespace }/${ name }`;
 
-export function list(store: any, clusterId: string, endpoint: string, namespace = DEV_ENV_NS): Promise<any> {
+export function list(store: any, clusterId: string, endpoint: string, namespace = REMUDA_NS): Promise<any> {
   return store.dispatch('management/request', { url: collectionUrl(clusterId, endpoint, namespace) });
 }
 
@@ -30,7 +30,7 @@ export function remove(store: any, clusterId: string, endpoint: string, namespac
   return store.dispatch('management/request', { url: resourceUrl(clusterId, endpoint, namespace, name), method: 'DELETE' });
 }
 
-export async function ensureNamespace(store: any, clusterId: string, namespace = DEV_ENV_NS): Promise<void> {
+export async function ensureNamespace(store: any, clusterId: string, namespace = REMUDA_NS): Promise<void> {
   try {
     await store.dispatch('management/request', { url: `${ base(clusterId) }/${ ENDPOINTS.namespace }/${ namespace }` });
   } catch {
@@ -52,7 +52,7 @@ export async function readyClusters(store: any): Promise<{ id: string; name: str
 }
 
 /** The ConfigMap records are the source of truth for what exists. */
-export async function readEnvironments(store: any, clusterId: string): Promise<DevEnvSpec[]> {
+export async function readEnvironments(store: any, clusterId: string): Promise<RemudaSpec[]> {
   const res = await list(store, clusterId, ENDPOINTS.configmap);
 
   return (res?.data || [])
@@ -68,7 +68,7 @@ export async function readEnvironments(store: any, clusterId: string): Promise<D
 }
 
 export async function createEnvironment(
-  store: any, clusterId: string, spec: DevEnvSpec, password: string
+  store: any, clusterId: string, spec: RemudaSpec, password: string
 ): Promise<void> {
   await ensureNamespace(store, clusterId, spec.namespace);
 
@@ -83,7 +83,7 @@ export async function createEnvironment(
  * to keep the namespace tidy; nginx keeps serving the previous bundle until the
  * new build stages its swap, so this is zero-downtime.
  */
-export async function rebuildUi(store: any, clusterId: string, spec: DevEnvSpec): Promise<void> {
+export async function rebuildUi(store: any, clusterId: string, spec: RemudaSpec): Promise<void> {
   const jobs = await list(store, clusterId, ENDPOINTS.job, spec.namespace);
 
   for (const job of jobs?.data || []) {
@@ -128,12 +128,12 @@ const OWNED_ENDPOINTS = [
   ENDPOINTS.configmap,
 ];
 
-export async function deleteEnvironment(store: any, clusterId: string, spec: DevEnvSpec): Promise<void> {
+export async function deleteEnvironment(store: any, clusterId: string, spec: RemudaSpec): Promise<void> {
   for (const endpoint of OWNED_ENDPOINTS) {
     const res = await list(store, clusterId, endpoint, spec.namespace);
 
     for (const obj of res?.data || []) {
-      // dev-envs-config holds the whole cluster's discovered defaults and is
+      // remuda-config holds the whole cluster's discovered defaults and is
       // shared by every environment, so it is never one environment's to
       // delete. It carries no owner label today, which would be enough on its
       // own -- this is belt and braces, because losing it silently breaks

@@ -6,7 +6,7 @@ describe('collectionUrl', () => {
   // nonsense selector still returned all 84 configmaps -- but honours filter=.
   it('filters by namespace rather than by label', () => {
     expect(collectionUrl('local', ENDPOINTS.configmap)).toBe(
-      '/k8s/clusters/local/v1/configmaps?filter=metadata.namespace=rancher-dev-envs'
+      '/k8s/clusters/local/v1/configmaps?filter=metadata.namespace=rancher-remuda'
     );
     expect(collectionUrl('local', ENDPOINTS.configmap)).not.toContain('labelSelector');
   });
@@ -18,8 +18,8 @@ describe('collectionUrl', () => {
 
 describe('resourceUrl', () => {
   it('addresses a single namespaced object', () => {
-    expect(resourceUrl('local', ENDPOINTS.ingress, 'rancher-dev-envs', 'multi-idp'))
-      .toBe('/k8s/clusters/local/v1/networking.k8s.io.ingresses/rancher-dev-envs/multi-idp');
+    expect(resourceUrl('local', ENDPOINTS.ingress, 'rancher-remuda', 'multi-idp'))
+      .toBe('/k8s/clusters/local/v1/networking.k8s.io.ingresses/rancher-remuda/multi-idp');
   });
 });
 
@@ -29,7 +29,7 @@ describe('deleteEnvironment', () => {
   // same namespace and the same collection as the environment's own ConfigMap.
   const sharedConfigMap = { metadata: { name: CONFIG_MAP_NAME } };
 
-  const spec = { name: 'multi-idp', namespace: 'rancher-dev-envs' } as any;
+  const spec = { name: 'multi-idp', namespace: 'rancher-remuda' } as any;
 
   function storeReturning(rows: any[]) {
     const deleted: string[] = [];
@@ -53,7 +53,7 @@ describe('deleteEnvironment', () => {
 
     await deleteEnvironment(store, 'local', spec);
 
-    expect(deleted.some((u) => u.endsWith('/configmaps/rancher-dev-envs/multi-idp'))).toBe(true);
+    expect(deleted.some((u) => u.endsWith('/configmaps/rancher-remuda/multi-idp'))).toBe(true);
   });
 
   it('never deletes the shared cluster defaults', async() => {

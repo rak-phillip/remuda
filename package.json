@@ -1,5 +1,5 @@
 {
-  "name": "rancher-dev-envs",
+  "name": "rancher-remuda",
   "version": "0.1.0",
   "private": false,
   "engines": {

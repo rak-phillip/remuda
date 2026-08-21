@@ -6,9 +6,9 @@ import {
 import {
   K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, UI_BUNDLE_PATH,
 } from '../constants';
-import type { DevEnvSpec } from '../../types';
+import type { RemudaSpec } from '../../types';
 
-const spec: DevEnvSpec = {
+const spec: RemudaSpec = {
   name:          'multi-idp',
   repo:          'https://github.com/rak-phillip/dashboard',
   branch:        'task/17295-multi-idp',
@@ -16,10 +16,10 @@ const spec: DevEnvSpec = {
   hostname:      'multi-idp.prak-bf3b08bd.ui.rancher.space',
   owner:         'prak',
   createdAt:     '2026-08-21T00:00:00.000Z',
-  namespace:     'rancher-dev-envs',
+  namespace:     'rancher-remuda',
   ingressClass:  'traefik',
   storageClass:  'local-path',
-  clusterIssuer: 'dev-envs-le',
+  clusterIssuer: 'remuda-le',
   dataSizeGb:    20,
   uiSizeGb:      2,
   cacheSizeGb:   8,
@@ -58,7 +58,7 @@ describe('urls', () => {
   // avoids depending on hairpin routing back through the ingress.
   it('builds the dashboard index url from the in-cluster service', () => {
     expect(dashboardIndexUrl(spec)).toBe(
-      'http://multi-idp-ui.rancher-dev-envs.svc.cluster.local/ui-bundle/index.html'
+      'http://multi-idp-ui.rancher-remuda.svc.cluster.local/ui-bundle/index.html'
     );
   });
 });
@@ -121,13 +121,13 @@ describe('ingressManifest', () => {
   });
 
   it('requests a certificate from the configured issuer', () => {
-    expect(ingress.metadata.annotations).toStrictEqual({ 'cert-manager.io/cluster-issuer': 'dev-envs-le' });
+    expect(ingress.metadata.annotations).toStrictEqual({ 'cert-manager.io/cluster-issuer': 'remuda-le' });
     expect(ingress.spec.tls).toStrictEqual([{ hosts: ['multi-idp.prak-bf3b08bd.ui.rancher.space'], secretName: 'multi-idp-tls' }]);
   });
 
   it('omits TLS entirely when no issuer is configured, rather than emitting an empty block', () => {
     const { clusterIssuer, ...noIssuer } = spec;
-    const body = ingressManifest(noIssuer as DevEnvSpec).body;
+    const body = ingressManifest(noIssuer as RemudaSpec).body;
 
     expect(body.spec.tls).toBeUndefined();
     expect(body.metadata.annotations).toBeUndefined();
@@ -143,7 +143,7 @@ describe('pvc', () => {
   it('omits the key entirely when the cluster has no default class', () => {
     const { storageClass, ...noClass } = spec;
 
-    expect('storageClassName' in dataPvcManifest(noClass as DevEnvSpec).body.spec).toBe(false);
+    expect('storageClassName' in dataPvcManifest(noClass as RemudaSpec).body.spec).toBe(false);
   });
 
   it('sizes each volume from the spec', () => {

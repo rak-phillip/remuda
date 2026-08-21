@@ -1,8 +1,9 @@
-# Rancher Dev Environments
+# Remuda
 
 A Rancher UI extension that deploys a Rancher instance running a **dashboard branch**, so QA,
 designers and other developers can click through work-in-progress UI changes without anyone
-standing up a backend by hand.
+standing up a backend by hand. (A *remuda* is the string of spare horses a ranch keeps so a rider
+always has a fresh one ready.)
 
 Give it a repo and a branch — including a personal fork such as
 `github.com/rak-phillip/dashboard` @ `task/17295-multi-idp` — and it builds the dashboard in the
@@ -102,12 +103,12 @@ actively wrong: the node's resolvers do not resolve `*.svc.cluster.local`, which
 ```yaml
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
-metadata: { name: dev-envs-le }
+metadata: { name: remuda-le }
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
     email: you@example.com
-    privateKeySecretRef: { name: dev-envs-le-account }
+    privateKeySecretRef: { name: remuda-le-account }
     solvers: [{ http01: { ingress: { class: traefik } } }]
 ```
 
@@ -152,7 +153,7 @@ yarn install
 API=https://your-rancher yarn dev     # https://127.0.0.1:8005
 yarn test
 yarn lint
-yarn build-pkg rancher-dev-envs
+yarn build-pkg remuda
 ```
 
 ## Caveats

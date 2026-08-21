@@ -10,17 +10,17 @@ import ConfirmDelete from '../components/ConfirmDelete.vue';
 import { deleteEnvironment, list, readEnvironments, readyClusters } from '../utils/api';
 import { environmentUrl } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
-import type { BuildState, DevEnvSummary } from '../types';
+import type { BuildState, RemudaSummary } from '../types';
 
 const store = useStore();
 const router = useRouter();
 const i18n = useText(store);
 const confirmDelete = ref<any>(null);
-const pendingDelete = ref<DevEnvSummary | null>(null);
+const pendingDelete = ref<RemudaSummary | null>(null);
 
 const loading = ref(true);
 const error = ref('');
-const rows = ref<DevEnvSummary[]>([]);
+const rows = ref<RemudaSummary[]>([]);
 let timer: any = null;
 
 function buildStateOf(jobs: any[], name: string): BuildState {
@@ -40,7 +40,7 @@ function buildStateOf(jobs: any[], name: string): BuildState {
   return latest.status?.failed ? 'failed' : 'building';
 }
 
-async function loadCluster(cluster: { id: string; name: string }): Promise<DevEnvSummary[]> {
+async function loadCluster(cluster: { id: string; name: string }): Promise<RemudaSummary[]> {
   const specs = await readEnvironments(store, cluster.id);
 
   if (!specs.length) {
@@ -75,13 +75,13 @@ async function load() {
     rows.value = results.flat();
     error.value = '';
   } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.loadFailed');
+    error.value = e?.message || i18n.t('remuda.error.loadFailed');
   } finally {
     loading.value = false;
   }
 }
 
-function askDelete(row: DevEnvSummary) {
+function askDelete(row: RemudaSummary) {
   pendingDelete.value = row;
   confirmDelete.value?.show();
 }
@@ -98,13 +98,13 @@ function confirmRemove(cb: (ok: boolean) => void) {
   remove(row, cb);
 }
 
-async function remove(row: DevEnvSummary, cb: (ok: boolean) => void) {
+async function remove(row: RemudaSummary, cb: (ok: boolean) => void) {
   try {
     await deleteEnvironment(store, row.clusterId, row.spec);
     await load();
     cb(true);
   } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.deleteFailed');
+    error.value = e?.message || i18n.t('remuda.error.deleteFailed');
     cb(false);
   }
 }
@@ -114,7 +114,7 @@ const goCreate = () => router.push({
   params: { cluster: BLANK_CLUSTER },
 });
 
-const goDetail = (row: DevEnvSummary) => router.push({
+const goDetail = (row: RemudaSummary) => router.push({
   name:   `${ PRODUCT_NAME }-c-cluster-detail`,
   params: {
     cluster: BLANK_CLUSTER, clusterId: row.clusterId, name: row.spec.name
@@ -135,17 +135,17 @@ onUnmounted(() => clearInterval(timer));
 <template>
   <Loading v-if="loading" />
   <div v-else>
-    <header class="dev-envs-header">
-      <h1>{{ i18n.t('devEnvs.list.title') }}</h1>
+    <header class="remuda-header">
+      <h1>{{ i18n.t('remuda.list.title') }}</h1>
       <button
         class="btn role-primary"
         @click="goCreate"
       >
-        {{ i18n.t('devEnvs.list.createAction') }}
+        {{ i18n.t('remuda.list.createAction') }}
       </button>
     </header>
     <p class="text-muted mb-20">
-      {{ i18n.t('devEnvs.list.subtitle') }}
+      {{ i18n.t('remuda.list.subtitle') }}
     </p>
 
     <Banner
@@ -156,22 +156,22 @@ onUnmounted(() => clearInterval(timer));
     <Banner
       v-if="isEmpty"
       color="info"
-      :label="i18n.t('devEnvs.list.empty')"
+      :label="i18n.t('remuda.list.empty')"
     />
 
     <table
       v-if="rows.length"
-      class="dev-envs-table"
+      class="remuda-table"
     >
       <thead>
         <tr>
-          <th>{{ i18n.t('devEnvs.list.columns.name') }}</th>
-          <th>{{ i18n.t('devEnvs.list.columns.cluster') }}</th>
-          <th>{{ i18n.t('devEnvs.list.columns.branch') }}</th>
-          <th>{{ i18n.t('devEnvs.list.columns.owner') }}</th>
-          <th>{{ i18n.t('devEnvs.list.columns.backend') }}</th>
-          <th>{{ i18n.t('devEnvs.list.columns.build') }}</th>
-          <th>{{ i18n.t('devEnvs.list.columns.url') }}</th>
+          <th>{{ i18n.t('remuda.list.columns.name') }}</th>
+          <th>{{ i18n.t('remuda.list.columns.cluster') }}</th>
+          <th>{{ i18n.t('remuda.list.columns.branch') }}</th>
+          <th>{{ i18n.t('remuda.list.columns.owner') }}</th>
+          <th>{{ i18n.t('remuda.list.columns.backend') }}</th>
+          <th>{{ i18n.t('remuda.list.columns.build') }}</th>
+          <th>{{ i18n.t('remuda.list.columns.url') }}</th>
           <th />
         </tr>
       </thead>
@@ -190,9 +190,9 @@ onUnmounted(() => clearInterval(timer));
           <td><code>{{ row.spec.branch }}</code></td>
           <td>{{ row.spec.owner }}</td>
           <td>
-            {{ row.backendReady ? i18n.t('devEnvs.state.ready') : i18n.t('devEnvs.state.pending') }}
+            {{ row.backendReady ? i18n.t('remuda.state.ready') : i18n.t('remuda.state.pending') }}
           </td>
-          <td>{{ i18n.t(`devEnvs.state.${row.buildState}`) }}</td>
+          <td>{{ i18n.t(`remuda.state.${row.buildState}`) }}</td>
           <td>
             <a
               :href="row.url"
@@ -220,13 +220,13 @@ onUnmounted(() => clearInterval(timer));
 </template>
 
 <style lang="scss" scoped>
-.dev-envs-header {
+.remuda-header {
   align-items: center;
   display: flex;
   justify-content: space-between;
 }
 
-.dev-envs-table {
+.remuda-table {
   border-collapse: collapse;
   width: 100%;
 

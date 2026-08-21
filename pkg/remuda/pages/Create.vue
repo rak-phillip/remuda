@@ -13,9 +13,9 @@ import { createEnvironment, installLocalPathStorage, readyClusters } from '../ut
 import { backendImageForBranch, discoverDefaults, hostnameFor, saveDefaults } from '../utils/discovery';
 import {
   BLANK_CLUSTER, DEFAULT_CACHE_SIZE_GB, DEFAULT_DATA_SIZE_GB, DEFAULT_NESTED_POD_CIDR,
-  DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, DEV_ENV_NS, PRODUCT_NAME,
+  DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, REMUDA_NS, PRODUCT_NAME,
 } from '../utils/constants';
-import type { DevEnvSpec } from '../types';
+import type { RemudaSpec } from '../types';
 
 const store = useStore();
 const router = useRouter();
@@ -98,7 +98,7 @@ async function loadDefaults() {
 
 watch(clusterId, loadDefaults);
 
-function buildSpec(): DevEnvSpec {
+function buildSpec(): RemudaSpec {
   return {
     name:          name.value,
     repo:          repo.value,
@@ -107,7 +107,7 @@ function buildSpec(): DevEnvSpec {
     hostname:      hostname.value,
     owner:         store.getters['auth/principalId']?.split('//')?.pop() || 'unknown',
     createdAt:     new Date().toISOString(),
-    namespace:     DEV_ENV_NS,
+    namespace:     REMUDA_NS,
     ingressClass:  ingressClass.value,
     storageClass:  storageClass.value || undefined,
     clusterIssuer: clusterIssuer.value || undefined,
@@ -140,7 +140,7 @@ async function submit(cb: (ok: boolean) => void) {
     cb(true);
     router.push({ name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } });
   } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.createFailed');
+    error.value = e?.message || i18n.t('remuda.error.createFailed');
     cb(false);
   }
 }
@@ -158,7 +158,7 @@ async function installStorage(cb: (ok: boolean) => void) {
     await loadDefaults();
     cb(true);
   } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.storageInstallFailed');
+    error.value = e?.message || i18n.t('remuda.error.storageInstallFailed');
     cb(false);
   } finally {
     installingStorage.value = false;
@@ -188,7 +188,7 @@ onMounted(async() => {
     clusterId.value = (clusters.value.find((c) => !c.isLocal) || clusters.value[0])?.id || '';
     await loadDefaults();
   } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.loadFailed');
+    error.value = e?.message || i18n.t('remuda.error.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -198,7 +198,7 @@ onMounted(async() => {
 <template>
   <Loading v-if="loading" />
   <div v-else>
-    <h1>{{ i18n.t('devEnvs.create.title') }}</h1>
+    <h1>{{ i18n.t('remuda.create.title') }}</h1>
 
     <Banner
       v-if="error"
@@ -208,20 +208,20 @@ onMounted(async() => {
     <Banner
       v-if="targetsLocal"
       color="warning"
-      :label="i18n.t('devEnvs.warning.localCluster')"
+      :label="i18n.t('remuda.warning.localCluster')"
     />
     <Banner
       v-if="storageUnavailable"
       color="error"
     >
-      <div class="dev-env-banner">
-        <span>{{ i18n.t('devEnvs.warning.noStorageClass') }}</span>
+      <div class="remuda-banner">
+        <span>{{ i18n.t('remuda.warning.noStorageClass') }}</span>
         <AsyncButton
           mode="apply"
           size="sm"
           :disabled="installingStorage"
-          :action-label="i18n.t('devEnvs.create.installStorage')"
-          :waiting-label="i18n.t('devEnvs.create.installingStorage')"
+          :action-label="i18n.t('remuda.create.installStorage')"
+          :waiting-label="i18n.t('remuda.create.installingStorage')"
           @click="installStorage"
         />
       </div>
@@ -229,28 +229,28 @@ onMounted(async() => {
     <Banner
       v-if="!clusterIssuer"
       color="warning"
-      :label="i18n.t('devEnvs.warning.noIssuer')"
+      :label="i18n.t('remuda.warning.noIssuer')"
     />
     <Banner
       v-if="!baseDomain"
       color="warning"
-      :label="i18n.t('devEnvs.warning.noBaseDomain')"
+      :label="i18n.t('remuda.warning.noBaseDomain')"
     />
 
     <div class="row mb-20">
       <div class="col span-6">
         <LabeledSelect
           v-model:value="clusterId"
-          :label="i18n.t('devEnvs.create.clusterLabel')"
+          :label="i18n.t('remuda.create.clusterLabel')"
           :options="clusterOptions"
         />
       </div>
       <div class="col span-6">
         <LabeledInput
           v-model:value="name"
-          :label="i18n.t('devEnvs.create.nameLabel')"
-          :placeholder="i18n.t('devEnvs.create.namePlaceholder')"
-          :tooltip="i18n.t('devEnvs.create.nameHint')"
+          :label="i18n.t('remuda.create.nameLabel')"
+          :placeholder="i18n.t('remuda.create.namePlaceholder')"
+          :tooltip="i18n.t('remuda.create.nameHint')"
         />
       </div>
     </div>
@@ -259,15 +259,15 @@ onMounted(async() => {
       <div class="col span-6">
         <LabeledInput
           v-model:value="repo"
-          :label="i18n.t('devEnvs.create.repoLabel')"
-          :placeholder="i18n.t('devEnvs.create.repoPlaceholder')"
+          :label="i18n.t('remuda.create.repoLabel')"
+          :placeholder="i18n.t('remuda.create.repoPlaceholder')"
         />
       </div>
       <div class="col span-6">
         <LabeledInput
           v-model:value="branch"
-          :label="i18n.t('devEnvs.create.branchLabel')"
-          :placeholder="i18n.t('devEnvs.create.branchPlaceholder')"
+          :label="i18n.t('remuda.create.branchLabel')"
+          :placeholder="i18n.t('remuda.create.branchPlaceholder')"
         />
       </div>
     </div>
@@ -276,7 +276,7 @@ onMounted(async() => {
       v-if="hostname"
       class="mb-20"
     >
-      <label>{{ i18n.t('devEnvs.create.hostnameLabel') }}</label>
+      <label>{{ i18n.t('remuda.create.hostnameLabel') }}</label>
       <div><code>https://{{ hostname }}</code></div>
     </div>
 
@@ -285,80 +285,80 @@ onMounted(async() => {
         <div class="col span-6">
           <LabeledInput
             v-model:value="backendImage"
-            :label="i18n.t('devEnvs.create.backendLabel')"
-            :tooltip="i18n.t('devEnvs.create.backendHint')"
+            :label="i18n.t('remuda.create.backendLabel')"
+            :tooltip="i18n.t('remuda.create.backendHint')"
             @update:value="backendTouched = true"
           />
         </div>
         <div class="col span-6">
           <LabeledInput
             v-model:value="gitSecretName"
-            :label="i18n.t('devEnvs.create.gitSecretLabel')"
-            :tooltip="i18n.t('devEnvs.create.gitSecretHint')"
+            :label="i18n.t('remuda.create.gitSecretLabel')"
+            :tooltip="i18n.t('remuda.create.gitSecretHint')"
           />
         </div>
       </div>
 
-      <h3>{{ i18n.t('devEnvs.create.clusterConfig') }}</h3>
+      <h3>{{ i18n.t('remuda.create.clusterConfig') }}</h3>
       <div class="row mb-20">
         <div class="col span-3">
           <LabeledInput
             v-model:value="baseDomain"
-            :label="i18n.t('devEnvs.create.baseDomain')"
-            :tooltip="i18n.t('devEnvs.create.baseDomainHint')"
+            :label="i18n.t('remuda.create.baseDomain')"
+            :tooltip="i18n.t('remuda.create.baseDomainHint')"
           />
         </div>
         <div class="col span-3">
           <LabeledInput
             v-model:value="ingressClass"
-            :label="i18n.t('devEnvs.create.ingressClass')"
+            :label="i18n.t('remuda.create.ingressClass')"
           />
         </div>
         <div class="col span-3">
           <LabeledInput
             v-model:value="storageClass"
-            :label="i18n.t('devEnvs.create.storageClass')"
+            :label="i18n.t('remuda.create.storageClass')"
           />
         </div>
         <div class="col span-3">
           <LabeledInput
             v-model:value="clusterIssuer"
-            :label="i18n.t('devEnvs.create.clusterIssuer')"
+            :label="i18n.t('remuda.create.clusterIssuer')"
           />
         </div>
       </div>
 
-      <h3>{{ i18n.t('devEnvs.create.sizes') }}</h3>
+      <h3>{{ i18n.t('remuda.create.sizes') }}</h3>
       <div class="row mb-20">
         <div class="col span-4">
           <LabeledInput
             v-model:value="dataSizeGb"
             type="number"
-            :label="i18n.t('devEnvs.create.dataSize')"
+            :label="i18n.t('remuda.create.dataSize')"
           />
         </div>
         <div class="col span-4">
           <LabeledInput
             v-model:value="uiSizeGb"
             type="number"
-            :label="i18n.t('devEnvs.create.uiSize')"
+            :label="i18n.t('remuda.create.uiSize')"
           />
         </div>
         <div class="col span-4">
           <LabeledInput
             v-model:value="cacheSizeGb"
             type="number"
-            :label="i18n.t('devEnvs.create.cacheSize')"
+            :label="i18n.t('remuda.create.cacheSize')"
           />
         </div>
       </div>
     </AdvancedSection>
 
-    <div class="dev-env-footer">
+    <div class="remuda-footer">
       <AsyncButton
         mode="create"
         :disabled="!canSubmit"
-        :action-label="i18n.t('devEnvs.create.submit')"
+        :action-label="i18n.t('remuda.create.submit')"
         @click="submit"
       />
     </div>
@@ -370,7 +370,7 @@ h3 {
   margin-bottom: 10px;
 }
 
-.dev-env-banner {
+.remuda-banner {
   align-items: center;
   display: flex;
   gap: 16px;
@@ -379,7 +379,7 @@ h3 {
 
 // Matches the other create forms: the action sits right, at its natural width,
 // rather than stretching the full width of the page.
-.dev-env-footer {
+.remuda-footer {
   display: flex;
   justify-content: flex-end;
   margin-top: 20px;

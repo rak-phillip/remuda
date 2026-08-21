@@ -1,10 +1,10 @@
 import {
-  DEV_ENV_NS, ENDPOINTS, INOTIFY_LIMITS, K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER,
+  REMUDA_NS, ENDPOINTS, INOTIFY_LIMITS, K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER,
   LABEL_ROLE, ROLE_BACKEND, ROLE_BUILD, ROLE_UI, UI_BUNDLE_PATH, BUILD_IMAGE, SERVE_IMAGE,
 } from './constants';
-import type { DevEnvSpec, ManifestRequest } from '../types';
+import type { RemudaSpec, ManifestRequest } from '../types';
 
-export const labelsFor = (spec: DevEnvSpec, role?: string): Record<string, string> => ({
+export const labelsFor = (spec: RemudaSpec, role?: string): Record<string, string> => ({
   [LABEL_MANAGED]: 'true',
   [LABEL_NAME]:    spec.name,
   [LABEL_OWNER]:   spec.owner,
@@ -12,23 +12,23 @@ export const labelsFor = (spec: DevEnvSpec, role?: string): Record<string, strin
 });
 
 /** Browser-facing. Baked into the bundle's asset URLs at build time. */
-export const resourceBase = (spec: DevEnvSpec): string => `https://${ spec.hostname }/${ UI_BUNDLE_PATH }`;
+export const resourceBase = (spec: RemudaSpec): string => `https://${ spec.hostname }/${ UI_BUNDLE_PATH }`;
 
 /**
  * Pod-facing. Rancher fetches ui-dashboard-index server-side, so this stays
  * in-cluster over plain HTTP and never depends on hairpinning through the ingress.
  */
-export const dashboardIndexUrl = (spec: DevEnvSpec): string => `http://${ spec.name }-ui.${ spec.namespace }.svc.cluster.local/${ UI_BUNDLE_PATH }/index.html`;
+export const dashboardIndexUrl = (spec: RemudaSpec): string => `http://${ spec.name }-ui.${ spec.namespace }.svc.cluster.local/${ UI_BUNDLE_PATH }/index.html`;
 
-export const environmentUrl = (spec: DevEnvSpec): string => `https://${ spec.hostname }`;
+export const environmentUrl = (spec: RemudaSpec): string => `https://${ spec.hostname }`;
 
-const meta = (spec: DevEnvSpec, name: string, role?: string) => ({
+const meta = (spec: RemudaSpec, name: string, role?: string) => ({
   name,
   namespace: spec.namespace,
   labels:    labelsFor(spec, role),
 });
 
-export function namespaceManifest(namespace: string = DEV_ENV_NS): ManifestRequest {
+export function namespaceManifest(namespace: string = REMUDA_NS): ManifestRequest {
   return {
     endpoint: ENDPOINTS.namespace,
     body:     {
@@ -39,7 +39,7 @@ export function namespaceManifest(namespace: string = DEV_ENV_NS): ManifestReque
   };
 }
 
-export function recordManifest(spec: DevEnvSpec): ManifestRequest {
+export function recordManifest(spec: RemudaSpec): ManifestRequest {
   return {
     endpoint: ENDPOINTS.configmap,
     body:     {
@@ -51,7 +51,7 @@ export function recordManifest(spec: DevEnvSpec): ManifestRequest {
   };
 }
 
-export function bootstrapSecretManifest(spec: DevEnvSpec, password: string): ManifestRequest {
+export function bootstrapSecretManifest(spec: RemudaSpec, password: string): ManifestRequest {
   return {
     endpoint: ENDPOINTS.secret,
     body:     {
@@ -64,7 +64,7 @@ export function bootstrapSecretManifest(spec: DevEnvSpec, password: string): Man
   };
 }
 
-function pvcManifest(spec: DevEnvSpec, suffix: string, sizeGb: number, role: string): ManifestRequest {
+function pvcManifest(spec: RemudaSpec, suffix: string, sizeGb: number, role: string): ManifestRequest {
   return {
     endpoint: ENDPOINTS.persistentvolumeclaim,
     body:     {
@@ -82,12 +82,12 @@ function pvcManifest(spec: DevEnvSpec, suffix: string, sizeGb: number, role: str
   };
 }
 
-export const dataPvcManifest = (spec: DevEnvSpec) => pvcManifest(spec, 'data', spec.dataSizeGb, ROLE_BACKEND);
-export const uiPvcManifest = (spec: DevEnvSpec) => pvcManifest(spec, 'ui', spec.uiSizeGb, ROLE_UI);
-export const cachePvcManifest = (spec: DevEnvSpec) => pvcManifest(spec, 'cache', spec.cacheSizeGb, ROLE_BUILD);
+export const dataPvcManifest = (spec: RemudaSpec) => pvcManifest(spec, 'data', spec.dataSizeGb, ROLE_BACKEND);
+export const uiPvcManifest = (spec: RemudaSpec) => pvcManifest(spec, 'ui', spec.uiSizeGb, ROLE_UI);
+export const cachePvcManifest = (spec: RemudaSpec) => pvcManifest(spec, 'cache', spec.cacheSizeGb, ROLE_BUILD);
 
 /** Name of the ConfigMap carrying the nested k3s config file. */
-export const k3sConfigName = (spec: DevEnvSpec): string => `${ spec.name }-k3s-config`;
+export const k3sConfigName = (spec: RemudaSpec): string => `${ spec.name }-k3s-config`;
 
 /**
  * Config for the k3s that the backend image starts inside its own pod.
@@ -101,7 +101,7 @@ export const k3sConfigName = (spec: DevEnvSpec): string => `${ spec.name }-k3s-c
  * cluster-dns is pinned rather than left to k3s's derivation so the value is
  * visible here next to the range it has to fall inside.
  */
-export function k3sConfigManifest(spec: DevEnvSpec): ManifestRequest {
+export function k3sConfigManifest(spec: RemudaSpec): ManifestRequest {
   const config = [
     'cluster-cidr:',
     `  - "${ spec.nestedPodCidr }"`,
@@ -144,7 +144,7 @@ export function clusterDnsFor(serviceCidr: string): string {
  * with a read-only /proc/sys, should not stop an environment from starting. The
  * values are echoed so the init container's log says what actually took effect.
  */
-export function inotifyInitContainer(spec: DevEnvSpec) {
+export function inotifyInitContainer(spec: RemudaSpec) {
   const writes = Object.entries(INOTIFY_LIMITS)
     .map(([key, value]) => {
       const path = `/proc/sys/${ key.replace(/\./g, '/') }`;
@@ -168,7 +168,7 @@ export function inotifyInitContainer(spec: DevEnvSpec) {
   };
 }
 
-export function backendDeploymentManifest(spec: DevEnvSpec): ManifestRequest {
+export function backendDeploymentManifest(spec: RemudaSpec): ManifestRequest {
   const selector = { [LABEL_NAME]: spec.name, [LABEL_ROLE]: ROLE_BACKEND };
 
   return {
@@ -239,7 +239,7 @@ export function backendDeploymentManifest(spec: DevEnvSpec): ManifestRequest {
   };
 }
 
-export function uiDeploymentManifest(spec: DevEnvSpec): ManifestRequest {
+export function uiDeploymentManifest(spec: RemudaSpec): ManifestRequest {
   const selector = { [LABEL_NAME]: spec.name, [LABEL_ROLE]: ROLE_UI };
 
   return {
@@ -280,7 +280,7 @@ export function uiDeploymentManifest(spec: DevEnvSpec): ManifestRequest {
   };
 }
 
-function serviceManifest(spec: DevEnvSpec, name: string, role: string, ports: any[]): ManifestRequest {
+function serviceManifest(spec: RemudaSpec, name: string, role: string, ports: any[]): ManifestRequest {
   return {
     endpoint: ENDPOINTS.service,
     body:     {
@@ -296,7 +296,7 @@ function serviceManifest(spec: DevEnvSpec, name: string, role: string, ports: an
   };
 }
 
-export const backendServiceManifest = (spec: DevEnvSpec) => serviceManifest(spec, spec.name, ROLE_BACKEND, [
+export const backendServiceManifest = (spec: RemudaSpec) => serviceManifest(spec, spec.name, ROLE_BACKEND, [
   {
     name: 'http', port: 80, targetPort: 80
   },
@@ -305,13 +305,13 @@ export const backendServiceManifest = (spec: DevEnvSpec) => serviceManifest(spec
   },
 ]);
 
-export const uiServiceManifest = (spec: DevEnvSpec) => serviceManifest(spec, `${ spec.name }-ui`, ROLE_UI, [
+export const uiServiceManifest = (spec: RemudaSpec) => serviceManifest(spec, `${ spec.name }-ui`, ROLE_UI, [
   {
     name: 'http', port: 80, targetPort: 80
   },
 ]);
 
-export function ingressManifest(spec: DevEnvSpec): ManifestRequest {
+export function ingressManifest(spec: RemudaSpec): ManifestRequest {
   const backend = (name: string) => ({ service: { name, port: { number: 80 } } });
 
   return {
@@ -348,7 +348,7 @@ export function ingressManifest(spec: DevEnvSpec): ManifestRequest {
   };
 }
 
-export function buildScript(spec: DevEnvSpec): string {
+export function buildScript(spec: RemudaSpec): string {
   // These are shell parameter expansions for the build container, not JS
   // template literals -- they must reach the script verbatim.
   /* eslint-disable no-template-curly-in-string */
@@ -383,7 +383,7 @@ export function buildScript(spec: DevEnvSpec): string {
   /* eslint-enable no-template-curly-in-string */
 }
 
-export function buildJobManifest(spec: DevEnvSpec, buildId: string): ManifestRequest {
+export function buildJobManifest(spec: RemudaSpec, buildId: string): ManifestRequest {
   const env: any[] = [
     { name: 'REPO', value: spec.repo },
     { name: 'BRANCH', value: spec.branch },
@@ -436,7 +436,7 @@ export function buildJobManifest(spec: DevEnvSpec, buildId: string): ManifestReq
 }
 
 /** Every object for a new environment, in dependency order. */
-export function allManifests(spec: DevEnvSpec, password: string, buildId: string): ManifestRequest[] {
+export function allManifests(spec: RemudaSpec, password: string, buildId: string): ManifestRequest[] {
   return [
     recordManifest(spec),
     bootstrapSecretManifest(spec, password),

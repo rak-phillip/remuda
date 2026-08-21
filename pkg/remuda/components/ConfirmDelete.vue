@@ -43,24 +43,24 @@ defineExpose({ show });
   <AppModal
     v-if="open"
     :width="480"
-    name="dev-env-confirm-delete"
-    aria-labelledby="dev-env-confirm-delete-title"
+    name="remuda-confirm-delete"
+    aria-labelledby="remuda-confirm-delete-title"
     trigger-focus-trap
     @close="close"
   >
-    <div class="dev-env-confirm">
-      <h4 id="dev-env-confirm-delete-title">
-        {{ i18n.t('devEnvs.confirmDelete.title', { name: props.name }) }}
+    <div class="remuda-confirm">
+      <h4 id="remuda-confirm-delete-title">
+        {{ i18n.t('remuda.confirmDelete.title', { name: props.name }) }}
       </h4>
-      <p>{{ i18n.t('devEnvs.confirmDelete.body') }}</p>
+      <p>{{ i18n.t('remuda.confirmDelete.body') }}</p>
 
-      <div class="dev-env-confirm-actions">
+      <div class="remuda-confirm-actions">
         <button
           type="button"
           class="btn role-secondary"
           @click="close"
         >
-          {{ i18n.t('devEnvs.confirmDelete.cancel') }}
+          {{ i18n.t('remuda.confirmDelete.cancel') }}
         </button>
         <AsyncButton
           mode="delete"
@@ -72,7 +72,7 @@ defineExpose({ show });
 </template>
 
 <style lang="scss" scoped>
-.dev-env-confirm {
+.remuda-confirm {
   padding: 20px;
 
   p {
@@ -80,7 +80,7 @@ defineExpose({ show });
   }
 }
 
-.dev-env-confirm-actions {
+.remuda-confirm-actions {
   display: flex;
   gap: 10px;
   justify-content: flex-end;

@@ -166,7 +166,7 @@ describe('saveDefaults', () => {
   it('updates in place when it already exists, carrying resourceVersion', async() => {
     // Steve rejects an update without one: "metadata.resourceVersion is
     // required for update". The old code PUT without it, always failed, then
-    // POSTed and got `configmaps "dev-envs-config" already exists` -- so every
+    // POSTed and got `configmaps "remuda-config" already exists` -- so every
     // create after the first on a cluster surfaced an error.
     const { store, calls } = mockStore({ metadata: { resourceVersion: '80357' } });
 

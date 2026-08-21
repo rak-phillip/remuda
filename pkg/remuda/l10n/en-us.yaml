@@ -1,7 +1,7 @@
 product:
-  dev-envs: Dev Environments
+  remuda: Remuda
 
-devEnvs:
+remuda:
   nav:
     environments: Environments
     create: Create

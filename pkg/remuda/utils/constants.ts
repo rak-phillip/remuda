@@ -1,16 +1,16 @@
-export const PRODUCT_NAME = 'dev-envs';
+export const PRODUCT_NAME = 'remuda';
 export const BLANK_CLUSTER = '_';
 
 /** Namespace that holds every dev environment on a given host cluster. */
-export const DEV_ENV_NS = 'rancher-dev-envs';
+export const REMUDA_NS = 'rancher-remuda';
 
 /** ConfigMap holding the per-cluster defaults discovered on first create. */
-export const CONFIG_MAP_NAME = 'dev-envs-config';
+export const CONFIG_MAP_NAME = 'remuda-config';
 
-export const LABEL_MANAGED = 'devenv.rancher.io/managed';
-export const LABEL_NAME = 'devenv.rancher.io/name';
-export const LABEL_OWNER = 'devenv.rancher.io/owner';
-export const LABEL_ROLE = 'devenv.rancher.io/role';
+export const LABEL_MANAGED = 'remuda.rancher.io/managed';
+export const LABEL_NAME = 'remuda.rancher.io/name';
+export const LABEL_OWNER = 'remuda.rancher.io/owner';
+export const LABEL_ROLE = 'remuda.rancher.io/role';
 
 export const ROLE_BACKEND = 'backend';
 export const ROLE_UI = 'ui';

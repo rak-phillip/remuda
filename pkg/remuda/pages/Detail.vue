@@ -12,7 +12,7 @@ import {
 } from '../utils/api';
 import { environmentUrl, resourceBase } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
-import type { DevEnvSpec } from '../types';
+import type { RemudaSpec } from '../types';
 
 const store = useStore();
 const route = useRoute();
@@ -24,7 +24,7 @@ const envName = route.params.name as string;
 
 const loading = ref(true);
 const error = ref('');
-const spec = ref<DevEnvSpec | null>(null);
+const spec = ref<RemudaSpec | null>(null);
 const password = ref('');
 const revealed = ref(false);
 const backendReady = ref(false);
@@ -59,7 +59,7 @@ const buildState = computed(() => {
  */
 const peekUrl = computed(() => (spec.value ? `/k8s/clusters/${ clusterId }/api/v1/namespaces/${ spec.value.namespace }/services/http:${ spec.value.name }:80/proxy/` : ''));
 
-async function loadPassword(env: DevEnvSpec) {
+async function loadPassword(env: RemudaSpec) {
   try {
     const secret = await store.dispatch('management/request', { url: resourceUrl(clusterId, ENDPOINTS.secret, env.namespace, `${ env.name }-bootstrap`) });
 
@@ -77,7 +77,7 @@ async function load() {
     spec.value = found;
 
     if (!found) {
-      error.value = i18n.t('devEnvs.error.loadFailed');
+      error.value = i18n.t('remuda.error.loadFailed');
 
       return;
     }
@@ -95,7 +95,7 @@ async function load() {
       await loadPassword(found);
     }
   } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.loadFailed');
+    error.value = e?.message || i18n.t('remuda.error.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -103,22 +103,22 @@ async function load() {
 
 async function rebuild(cb: (ok: boolean) => void) {
   try {
-    await rebuildUi(store, clusterId, spec.value as DevEnvSpec);
+    await rebuildUi(store, clusterId, spec.value as RemudaSpec);
     await load();
     cb(true);
   } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.rebuildFailed');
+    error.value = e?.message || i18n.t('remuda.error.rebuildFailed');
     cb(false);
   }
 }
 
 async function remove(cb: (ok: boolean) => void) {
   try {
-    await deleteEnvironment(store, clusterId, spec.value as DevEnvSpec);
+    await deleteEnvironment(store, clusterId, spec.value as RemudaSpec);
     cb(true);
     router.push({ name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } });
   } catch (e: any) {
-    error.value = e?.message || i18n.t('devEnvs.error.deleteFailed');
+    error.value = e?.message || i18n.t('remuda.error.deleteFailed');
     cb(false);
   }
 }
@@ -144,9 +144,9 @@ onUnmounted(() => clearInterval(timer));
     />
 
     <template v-if="spec">
-      <h3>{{ i18n.t('devEnvs.detail.access') }}</h3>
-      <dl class="dev-env-facts">
-        <dt>{{ i18n.t('devEnvs.detail.url') }}</dt>
+      <h3>{{ i18n.t('remuda.detail.access') }}</h3>
+      <dl class="remuda-facts">
+        <dt>{{ i18n.t('remuda.detail.url') }}</dt>
         <dd>
           <a
             :href="url"
@@ -155,7 +155,7 @@ onUnmounted(() => clearInterval(timer));
           >{{ url }}</a>
         </dd>
 
-        <dt>{{ i18n.t('devEnvs.detail.password') }}</dt>
+        <dt>{{ i18n.t('remuda.detail.password') }}</dt>
         <dd>
           <code v-if="revealed">{{ password }}</code>
           <code v-else>••••••••••••</code>
@@ -173,42 +173,42 @@ onUnmounted(() => clearInterval(timer));
           </button>
         </dd>
 
-        <dt>{{ i18n.t('devEnvs.list.columns.backend') }}</dt>
-        <dd>{{ backendReady ? i18n.t('devEnvs.state.ready') : i18n.t('devEnvs.state.pending') }}</dd>
+        <dt>{{ i18n.t('remuda.list.columns.backend') }}</dt>
+        <dd>{{ backendReady ? i18n.t('remuda.state.ready') : i18n.t('remuda.state.pending') }}</dd>
 
-        <dt>{{ i18n.t('devEnvs.list.columns.build') }}</dt>
-        <dd>{{ i18n.t(`devEnvs.state.${buildState}`) }}</dd>
+        <dt>{{ i18n.t('remuda.list.columns.build') }}</dt>
+        <dd>{{ i18n.t(`remuda.state.${buildState}`) }}</dd>
       </dl>
 
-      <h3>{{ i18n.t('devEnvs.detail.source') }}</h3>
-      <dl class="dev-env-facts">
-        <dt>{{ i18n.t('devEnvs.create.repoLabel') }}</dt>
+      <h3>{{ i18n.t('remuda.detail.source') }}</h3>
+      <dl class="remuda-facts">
+        <dt>{{ i18n.t('remuda.create.repoLabel') }}</dt>
         <dd><code>{{ spec.repo }}</code></dd>
 
-        <dt>{{ i18n.t('devEnvs.create.branchLabel') }}</dt>
+        <dt>{{ i18n.t('remuda.create.branchLabel') }}</dt>
         <dd><code>{{ spec.branch }}</code></dd>
 
-        <dt>{{ i18n.t('devEnvs.detail.backendImage') }}</dt>
+        <dt>{{ i18n.t('remuda.detail.backendImage') }}</dt>
         <dd><code>{{ spec.backendImage }}</code></dd>
 
         <dt>Asset base</dt>
         <dd><code>{{ assetBase }}</code></dd>
 
-        <dt>{{ i18n.t('devEnvs.detail.peek') }}</dt>
+        <dt>{{ i18n.t('remuda.detail.peek') }}</dt>
         <dd>
           <a
             :href="peekUrl"
             target="_blank"
             rel="noopener noreferrer"
-          >{{ i18n.t('devEnvs.detail.peek') }}</a>
+          >{{ i18n.t('remuda.detail.peek') }}</a>
         </dd>
       </dl>
 
       <p class="text-muted">
-        {{ i18n.t('devEnvs.detail.buildLogHint') }}
+        {{ i18n.t('remuda.detail.buildLogHint') }}
       </p>
 
-      <div class="dev-env-actions">
+      <div class="remuda-actions">
         <!--
           AsyncButton has no `label` prop -- it takes a label per phase, and
           otherwise falls back to asyncButton.<mode>.<phase>. Passing `label`
@@ -217,9 +217,9 @@ onUnmounted(() => clearInterval(timer));
         -->
         <AsyncButton
           mode="apply"
-          :action-label="i18n.t('devEnvs.detail.rebuild')"
-          :waiting-label="i18n.t('devEnvs.detail.rebuilding')"
-          :success-label="i18n.t('devEnvs.detail.rebuild')"
+          :action-label="i18n.t('remuda.detail.rebuild')"
+          :waiting-label="i18n.t('remuda.detail.rebuilding')"
+          :success-label="i18n.t('remuda.detail.rebuild')"
           @click="rebuild"
         />
         <AsyncButton
@@ -238,7 +238,7 @@ onUnmounted(() => clearInterval(timer));
 </template>
 
 <style lang="scss" scoped>
-.dev-env-facts {
+.remuda-facts {
   display: grid;
   gap: 8px 20px;
   grid-template-columns: max-content 1fr;
@@ -253,7 +253,7 @@ onUnmounted(() => clearInterval(timer));
   }
 }
 
-.dev-env-actions {
+.remuda-actions {
   display: flex;
   gap: 10px;
   margin-top: 20px;

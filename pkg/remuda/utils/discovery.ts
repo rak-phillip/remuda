@@ -1,6 +1,6 @@
 import {
   CONFIG_MAP_NAME, DEFAULT_BACKEND_IMAGE, DEFAULT_NESTED_POD_CIDR, DEFAULT_NESTED_SERVICE_CIDR,
-  DEV_ENV_NS, ENDPOINTS, NESTED_CIDR_CANDIDATES,
+  REMUDA_NS, ENDPOINTS, NESTED_CIDR_CANDIDATES,
 } from './constants';
 import { create, list } from './api';
 import type { ClusterDefaults } from '../types';
@@ -275,18 +275,18 @@ export async function discoverDefaults(store: any, clusterId: string): Promise<C
  * carries no resourceVersion with "metadata.resourceVersion is required for
  * update". An earlier version PUT without one and fell back to POST on failure,
  * which meant the PUT *always* failed and the POST then always returned
- * `configmaps "dev-envs-config" already exists` -- so every create after the
+ * `configmaps "remuda-config" already exists` -- so every create after the
  * first one on a given cluster reported an error.
  *
  * Reading first also makes the write a compare-and-swap rather than a blind
  * overwrite, so two people creating at once cannot silently clobber each other.
  */
 export async function saveDefaults(store: any, clusterId: string, defaults: ClusterDefaults): Promise<void> {
-  const url = `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.configmap }/${ DEV_ENV_NS }/${ CONFIG_MAP_NAME }`;
+  const url = `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.configmap }/${ REMUDA_NS }/${ CONFIG_MAP_NAME }`;
   const body = {
     apiVersion: 'v1',
     kind:       'ConfigMap',
-    metadata:   { name: CONFIG_MAP_NAME, namespace: DEV_ENV_NS },
+    metadata:   { name: CONFIG_MAP_NAME, namespace: REMUDA_NS },
     data:       { defaults: JSON.stringify(defaults, null, 2) },
   };
 

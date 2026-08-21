@@ -1,5 +1,5 @@
 {
-  "name": "rancher-dev-envs",
+  "name": "remuda",
   "description": "Deploy a Rancher instance running a dashboard branch, so QA and design can review WIP work",
   "version": "0.1.0",
   "private": false,
@@ -7,7 +7,7 @@
     "annotations": {
       "catalog.cattle.io/rancher-version": ">= 2.10.0",
       "catalog.cattle.io/ui-extensions-version": ">= 3.0.0 < 4.0.0",
-      "catalog.cattle.io/display-name": "Dev Environments",
+      "catalog.cattle.io/display-name": "Remuda",
       "catalog.cattle.io/kube-version": ">= v1.26.0-0"
     }
   },

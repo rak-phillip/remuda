@@ -1,5 +1,5 @@
 /** Everything needed to render a dev environment's manifests. */
-export interface DevEnvSpec {
+export interface RemudaSpec {
   name: string;
   /** Clone URL, e.g. https://github.com/rak-phillip/dashboard */
   repo: string;
@@ -57,8 +57,8 @@ export interface ManifestRequest {
 export type BuildState = 'building' | 'ready' | 'failed' | 'unknown';
 
 /** A dev environment as presented in the list, merged from several resources. */
-export interface DevEnvSummary {
-  spec: DevEnvSpec;
+export interface RemudaSummary {
+  spec: RemudaSpec;
   clusterId: string;
   clusterName: string;
   backendReady: boolean;
