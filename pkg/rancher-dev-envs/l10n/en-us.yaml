@@ -53,6 +53,8 @@ devEnvs:
     ingressClass: Ingress class
     storageClass: Storage class
     clusterIssuer: cert-manager ClusterIssuer
+    installStorage: Install local storage
+    installingStorage: Installing
     submit: Create
     creating: Creating
 
@@ -84,8 +86,8 @@ devEnvs:
       Prefer a downstream cluster where one is available.
     noStorageClass: >-
       This cluster has no StorageClass, so the environment's volumes can never be
-      bound and the build will not start. Add a StorageClass to the cluster, or
-      name one to use under Show Advanced.
+      bound and the build will not start. Install node-local storage below, or
+      name a class of your own under Show Advanced.
     noIssuer: >-
       No cert-manager ClusterIssuer was found on this cluster, so the environment
       will be created without TLS and browsers will warn on every visit.
@@ -98,3 +100,4 @@ devEnvs:
     loadFailed: Could not load environments
     deleteFailed: Could not delete the environment
     rebuildFailed: Could not start the rebuild
+    storageInstallFailed: Could not install local-path storage on this cluster

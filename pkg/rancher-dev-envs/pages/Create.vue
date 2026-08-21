@@ -9,7 +9,7 @@ import AdvancedSection from '@shell/components/AdvancedSection.vue';
 import LabeledInput from '@components/Form/LabeledInput/LabeledInput.vue';
 import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
 import { useText } from '../utils/i18n';
-import { createEnvironment, readyClusters } from '../utils/api';
+import { createEnvironment, installLocalPathStorage, readyClusters } from '../utils/api';
 import { backendImageForBranch, discoverDefaults, hostnameFor, saveDefaults } from '../utils/discovery';
 import {
   BLANK_CLUSTER, DEFAULT_CACHE_SIZE_GB, DEFAULT_DATA_SIZE_GB, DEFAULT_NESTED_POD_CIDR,
@@ -39,6 +39,7 @@ const ingressClass = ref('');
 const storageClass = ref('');
 const clusterIssuer = ref('');
 const hasStorageClass = ref(true);
+const installingStorage = ref(false);
 
 // Chosen against the host cluster's own ranges when defaults are discovered.
 const nestedPodCidr = ref(DEFAULT_NESTED_POD_CIDR);
@@ -144,6 +145,26 @@ async function submit(cb: (ok: boolean) => void) {
   }
 }
 
+/**
+ * Offered rather than done automatically: this installs a Deployment and a
+ * cluster-default StorageClass, which is a change to the whole cluster and not
+ * something to do behind someone's back. Once it lands, discovery re-runs and
+ * fills the storage class field in, which the user can still override.
+ */
+async function installStorage(cb: (ok: boolean) => void) {
+  installingStorage.value = true;
+  try {
+    await installLocalPathStorage(store, clusterId.value);
+    await loadDefaults();
+    cb(true);
+  } catch (e: any) {
+    error.value = e?.message || i18n.t('devEnvs.error.storageInstallFailed');
+    cb(false);
+  } finally {
+    installingStorage.value = false;
+  }
+}
+
 async function savePrefillDefaults() {
   try {
     await saveDefaults(store, clusterId.value, {
@@ -192,8 +213,19 @@ onMounted(async() => {
     <Banner
       v-if="storageUnavailable"
       color="error"
-      :label="i18n.t('devEnvs.warning.noStorageClass')"
-    />
+    >
+      <div class="dev-env-banner">
+        <span>{{ i18n.t('devEnvs.warning.noStorageClass') }}</span>
+        <AsyncButton
+          mode="apply"
+          size="sm"
+          :disabled="installingStorage"
+          :action-label="i18n.t('devEnvs.create.installStorage')"
+          :waiting-label="i18n.t('devEnvs.create.installingStorage')"
+          @click="installStorage"
+        />
+      </div>
+    </Banner>
     <Banner
       v-if="!clusterIssuer"
       color="warning"
@@ -336,6 +368,13 @@ onMounted(async() => {
 <style lang="scss" scoped>
 h3 {
   margin-bottom: 10px;
+}
+
+.dev-env-banner {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
 }
 
 // Matches the other create forms: the action sits right, at its natural width,

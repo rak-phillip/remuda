@@ -75,6 +75,26 @@ export const INOTIFY_LIMITS = {
   'fs.inotify.max_user_watches':   524288,
 } as const;
 
+/**
+ * Fallback storage for a cluster that provisions none of its own.
+ *
+ * k3s ships local-path-provisioner; RKE2 and most imported clusters do not, and
+ * an environment cannot work without *some* StorageClass -- its three PVCs never
+ * bind and the build pod is never scheduled. Node-local storage also happens to
+ * suit this workload: the bundle PVC is ReadWriteOnce and is written by the
+ * build Job then read by nginx, so both pods have to land on one node anyway.
+ */
+export const LOCAL_PATH = {
+  namespace:      'local-path-storage',
+  storageClass:   'local-path',
+  provisioner:    'rancher.io/local-path',
+  serviceAccount: 'local-path-provisioner-service-account',
+  image:          'rancher/local-path-provisioner:v0.0.35',
+  helperImage:    'busybox:1.37',
+  /** Where volumes are written on the node. */
+  hostPath:       '/opt/local-path-provisioner',
+} as const;
+
 export const DEFAULT_DATA_SIZE_GB = 20;
 export const DEFAULT_UI_SIZE_GB = 2;
 export const DEFAULT_CACHE_SIZE_GB = 8;
@@ -92,5 +112,10 @@ export const ENDPOINTS = {
   ingress:               'networking.k8s.io.ingresses',
   ingressclass:          'networking.k8s.io.ingressclasses',
   storageclass:          'storage.k8s.io.storageclasses',
+  serviceaccount:        'serviceaccounts',
+  clusterrole:           'rbac.authorization.k8s.io.clusterroles',
+  clusterrolebinding:    'rbac.authorization.k8s.io.clusterrolebindings',
+  role:                  'rbac.authorization.k8s.io.roles',
+  rolebinding:           'rbac.authorization.k8s.io.rolebindings',
   clusterissuer:         'cert-manager.io.clusterissuers',
 } as const;

@@ -1,5 +1,6 @@
 import { CONFIG_MAP_NAME, DEV_ENV_NS, ENDPOINTS, LABEL_NAME } from './constants';
 import { allManifests, buildJobManifest, namespaceManifest } from './manifests';
+import { localPathManifests } from './storage';
 import type { DevEnvSpec, ManifestRequest } from '../types';
 
 const base = (clusterId: string) => `/k8s/clusters/${ clusterId }/v1`;
@@ -92,6 +93,28 @@ export async function rebuildUi(store: any, clusterId: string, spec: DevEnvSpec)
   }
 
   await create(store, clusterId, buildJobManifest(spec, `${ Date.now() }`));
+}
+
+/**
+ * Give the target cluster a default StorageClass backed by local-path.
+ *
+ * Cluster-wide infrastructure, not part of any environment, so it is created
+ * separately and never torn down with one. Objects that already exist are
+ * skipped rather than treated as failures, so this is safe to re-run -- a
+ * half-finished previous attempt should be completable, not a dead end.
+ */
+export async function installLocalPathStorage(store: any, clusterId: string): Promise<void> {
+  for (const manifest of localPathManifests()) {
+    try {
+      await create(store, clusterId, manifest);
+    } catch (e: any) {
+      const message = e?.message || '';
+
+      if (!/already exists/i.test(message)) {
+        throw e;
+      }
+    }
+  }
 }
 
 /** Every kind an environment owns, in reverse dependency order. */
