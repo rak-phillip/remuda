@@ -173,6 +173,12 @@ describe('buildScript', () => {
     expect(script).not.toContain('build-hosted');
   });
 
+  // shell/vue.config.js reads DASHBOARD_VERSION, not VERSION; without it the
+  // About page in the deployed environment reads "undefined".
+  it('sets DASHBOARD_VERSION so the About page identifies the branch', () => {
+    expect(script).toContain('DASHBOARD_VERSION="$BRANCH $(cat /out/COMMIT.txt)"');
+  });
+
   it('clones the requested branch shallowly', () => {
     expect(script).toContain('git clone --depth 1 --branch "$BRANCH"');
   });

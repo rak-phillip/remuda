@@ -264,7 +264,10 @@ export function buildScript(spec: DevEnvSpec): string {
     // build-hosted derives OUTPUT_DIR from the branch name, and branches like
     // task/17295-multi-idp contain a slash. Call the build directly instead so
     // the served path is predictable.
-    `COMMIT="$(cat /out/COMMIT.txt)" VERSION="$BRANCH" OUTPUT_DIR="dist/${ UI_BUNDLE_PATH }" \\`,
+    // shell/vue.config.js reads DASHBOARD_VERSION for the About page; scripts/version
+    // sets it to "<branch> <commit>" when no tag contains HEAD, which is our case.
+    `COMMIT="$(cat /out/COMMIT.txt)" VERSION="$BRANCH" \\`,
+    `  DASHBOARD_VERSION="$BRANCH $(cat /out/COMMIT.txt)" OUTPUT_DIR="dist/${ UI_BUNDLE_PATH }" \\`,
     `  ROUTER_BASE="/dashboard/" RESOURCE_BASE="${ resourceBase(spec) }" \\`,
     '  yarn run build',
     // Stage the swap so nginx never serves a half-written bundle.
