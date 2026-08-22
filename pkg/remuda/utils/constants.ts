@@ -114,6 +114,14 @@ export const LOCAL_PATH = {
   hostPath:       '/opt/local-path-provisioner',
 } as const;
 
+/**
+ * How long after an environment is recorded its backend Deployment may be
+ * missing before the environment is called incomplete. Generous on purpose: the
+ * create writes twelve objects in sequence, and a slow cluster should not make a
+ * healthy environment look broken.
+ */
+export const INCOMPLETE_AFTER_MS = 2 * 60 * 1000;
+
 export const DEFAULT_DATA_SIZE_GB = 20;
 export const DEFAULT_UI_SIZE_GB = 2;
 export const DEFAULT_CACHE_SIZE_GB = 8;

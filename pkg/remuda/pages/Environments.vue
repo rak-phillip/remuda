@@ -8,10 +8,11 @@ import RcButton from '@components/RcButton/RcButton.vue';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import EmptyState from '../components/EmptyState.vue';
+import { buildStateOf, isIncomplete } from '../utils/status';
 import { deleteEnvironment, list, readEnvironments, readyClusters } from '../utils/api';
 import { environmentUrl } from '../utils/manifests';
-import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
-import type { BuildState, RemudaSummary } from '../types';
+import { BLANK_CLUSTER, ENDPOINTS, PRODUCT_NAME } from '../utils/constants';
+import type { RemudaSummary } from '../types';
 
 const store = useStore();
 const router = useRouter();
@@ -23,23 +24,6 @@ const loading = ref(true);
 const error = ref('');
 const rows = ref<RemudaSummary[]>([]);
 let timer: any = null;
-
-function buildStateOf(jobs: any[], name: string): BuildState {
-  const mine = jobs.filter((j) => j.metadata?.labels?.[LABEL_NAME] === name);
-
-  if (!mine.length) {
-    return 'unknown';
-  }
-
-  // Newest first, so a rebuild's state wins over the build it replaced.
-  const latest = mine.sort((a, b) => (b.metadata?.creationTimestamp || '').localeCompare(a.metadata?.creationTimestamp || ''))[0];
-
-  if (latest.status?.succeeded) {
-    return 'ready';
-  }
-
-  return latest.status?.failed ? 'failed' : 'building';
-}
 
 async function loadCluster(cluster: { id: string; name: string }): Promise<RemudaSummary[]> {
   const specs = await readEnvironments(store, cluster.id);
@@ -62,6 +46,7 @@ async function loadCluster(cluster: { id: string; name: string }): Promise<Remud
       clusterName:  cluster.name,
       backendReady: (backend?.status?.readyReplicas || 0) > 0,
       buildState:   buildStateOf(jobs.data || [], spec.name),
+      incomplete:   isIncomplete(spec, !!backend),
       url:          environmentUrl(spec),
     };
   });
@@ -123,6 +108,7 @@ const goDetail = (row: RemudaSummary) => router.push({
 });
 
 const isEmpty = computed(() => !loading.value && !rows.value.length);
+const hasIncomplete = computed(() => rows.value.some((r) => r.incomplete));
 
 onMounted(() => {
   load();
@@ -154,6 +140,12 @@ onUnmounted(() => clearInterval(timer));
       color="error"
       :label="error"
     />
+    <Banner
+      v-if="hasIncomplete"
+      color="warning"
+      :label="i18n.t('remuda.list.incompleteHint')"
+    />
+
     <EmptyState
       v-if="isEmpty"
       icon="circle-plus"
@@ -201,11 +193,19 @@ onUnmounted(() => clearInterval(timer));
           <td><code>{{ row.spec.branch }}</code></td>
           <td>{{ row.spec.owner }}</td>
           <td>
-            {{ row.backendReady ? i18n.t('remuda.state.ready') : i18n.t('remuda.state.pending') }}
+            <span
+              v-if="row.incomplete"
+              class="remuda-incomplete"
+            >{{ i18n.t('remuda.state.incomplete') }}</span>
+            <template v-else>
+              {{ row.backendReady ? i18n.t('remuda.state.ready') : i18n.t('remuda.state.pending') }}
+            </template>
           </td>
-          <td>{{ i18n.t(`remuda.state.${row.buildState}`) }}</td>
+          <td>{{ row.incomplete ? '—' : i18n.t(`remuda.state.${row.buildState}`) }}</td>
           <td>
+            <span v-if="row.incomplete">—</span>
             <a
+              v-else
               :href="row.url"
               target="_blank"
               rel="noopener noreferrer"
@@ -237,6 +237,11 @@ onUnmounted(() => clearInterval(timer));
   align-items: center;
   display: flex;
   justify-content: space-between;
+}
+
+.remuda-incomplete {
+  color: var(--error);
+  font-weight: 600;
 }
 
 .remuda-table {

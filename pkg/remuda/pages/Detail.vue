@@ -12,6 +12,7 @@ import {
 } from '../utils/api';
 import { ingressEntry } from '../utils/discovery';
 import { hopHasDrifted } from '../utils/hop';
+import { isIncomplete } from '../utils/status';
 import { environmentUrl, resourceBase } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
 import type { IngressEntry, RemudaSpec } from '../types';
@@ -30,6 +31,9 @@ const spec = ref<RemudaSpec | null>(null);
 const password = ref('');
 const revealed = ref(false);
 const backendReady = ref(false);
+// Distinct from backendReady: the Deployment existing at all is what says the
+// create got far enough, regardless of whether its pod is up yet.
+const hasBackend = ref(false);
 const jobs = ref<any[]>([]);
 const confirmDelete = ref<any>(null);
 // Both sides of the drift comparison, refreshed on every poll: what the target
@@ -63,6 +67,10 @@ const buildState = computed(() => {
  * useful for checking the pod answers at all. It is not a usable way to browse
  * the nested UI -- absolute /dashboard and /v1 paths break under a path prefix.
  */
+// Recorded but never built. The page still renders, because deleting it is the
+// way out and that needs the spec.
+const incomplete = computed(() => !!spec.value && isIncomplete(spec.value, backendReady.value || hasBackend.value));
+
 const hop = computed(() => spec.value?.hop);
 const hopDrifted = computed(() => hopHasDrifted(activeAddresses.value, liveEntry.value?.addresses || []));
 const hopIsPublic = computed(() => hop.value?.addressType === 'ExternalIP');
@@ -97,8 +105,10 @@ async function load() {
       list(store, clusterId, ENDPOINTS.job).catch(() => ({ data: [] })),
     ]);
 
-    backendReady.value = ((deployments.data || [])
-      .find((d: any) => d.metadata?.name === found.name)?.status?.readyReplicas || 0) > 0;
+    const backend = (deployments.data || []).find((d: any) => d.metadata?.name === found.name);
+
+    hasBackend.value = !!backend;
+    backendReady.value = (backend?.status?.readyReplicas || 0) > 0;
     jobs.value = (allJobs.data || []).filter((j: any) => j.metadata?.labels?.[LABEL_NAME] === found.name);
 
     if (!password.value) {
@@ -211,6 +221,12 @@ onUnmounted(() => clearInterval(timer));
     />
 
     <template v-if="spec">
+      <Banner
+        v-if="incomplete"
+        color="warning"
+        :label="i18n.t('remuda.detail.incomplete')"
+      />
+
       <h3>{{ i18n.t('remuda.detail.access') }}</h3>
       <dl class="remuda-facts">
         <dt>{{ i18n.t('remuda.detail.url') }}</dt>

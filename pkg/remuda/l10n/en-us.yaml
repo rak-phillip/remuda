@@ -15,6 +15,10 @@ remuda:
       and design can review work in progress at a shareable URL.
     createAction: Create
     delete: Delete
+    incompleteHint: >-
+      An environment below was recorded but never finished being created, so
+      nothing is running for it. Delete it and create it again; the name stays
+      reserved until you do.
     columns:
       name: Name
       cluster: Cluster
@@ -26,6 +30,7 @@ remuda:
       age: Age
 
   state:
+    incomplete: Incomplete
     building: Building
     ready: Ready
     failed: Failed
@@ -72,6 +77,13 @@ remuda:
     rebuild: Rebuild UI
     rebuilding: Rebuilding
     delete: Delete
+    incompleteHint: >-
+      An environment below was recorded but never finished being created, so
+      nothing is running for it. Delete it and create it again; the name stays
+      reserved until you do.
+    incomplete: >-
+      This environment was recorded but never finished being created, so nothing
+      is running for it. Delete it and create it again.
     networking: Networking
     hopRoute: Route
     hopAddressType: Address type

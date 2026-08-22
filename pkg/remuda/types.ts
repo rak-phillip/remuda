@@ -117,5 +117,7 @@ export interface RemudaSummary {
   clusterName: string;
   backendReady: boolean;
   buildState: BuildState;
+  /** Record exists but the workload was never created. See isIncomplete(). */
+  incomplete: boolean;
   url: string;
 }
