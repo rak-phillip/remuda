@@ -196,6 +196,66 @@ kubectl get apiservice v1.ext.cattle.io            # AVAILABLE True once charts 
 
 One build at a time is comfortable on such a node.
 
+## Installing
+
+Add the Helm repository once, in **Apps → Repositories → Create → Helm Repository**:
+
+```
+Index URL   https://rak-phillip.github.io/remuda/
+```
+
+**Remuda** then appears under **Extensions**, and `remuda-controller` under **Apps → Charts**.
+
+Two things worth knowing before installing:
+
+- The extension bundle is fetched at runtime from `raw.githubusercontent.com`, so the cluster running
+  `ui-plugin-server` needs egress to GitHub. For an air-gapped install use the Extension Catalog Image
+  at `ghcr.io/rak-phillip/ui-extension-remuda` instead, via **Extensions → Manage Extension Catalogs**.
+- The controller is optional. Without it the cross-cluster hop is still repaired, but only while an
+  environment's detail page is open and in the foreground.
+
+## Releasing
+
+One tag ships everything:
+
+```bash
+scripts/bump-version 0.2.0
+git commit -am 'Release 0.2.0'
+git tag v0.2.0 && git push && git push --tags
+```
+
+`scripts/bump-version` rewrites the version in the three files that carry it — the root
+`package.json`, `pkg/remuda/package.json`, and the controller's `Chart.yaml` (`version` and
+`appVersion`). `.github/workflows/release.yml` refuses to publish if any of them disagrees with the
+tag, so a mistyped tag fails immediately rather than halfway through.
+
+The tag is `vX.Y.Z`, but the Rancher tooling matches on `<package name>-<version>`. The workflow
+derives `remuda-X.Y.Z` and passes that down; the upstream scripts never see the `v` form.
+
+What a tag produces:
+
+| Job | Artifact | Lands in |
+|---|---|---|
+| `charts` | Extension chart + plugin bundle | `gh-pages` → the Helm repo above |
+| `catalog` | Extension Catalog Image | `ghcr.io/rak-phillip/ui-extension-remuda` |
+| `controller-image` | Controller image | `ghcr.io/rak-phillip/remuda-controller` |
+| `controller-chart` | Controller chart | `gh-pages`, merged into the same index |
+
+`controller-chart` runs strictly after `charts`, because both push to `gh-pages`.
+
+### First-time repository setup
+
+Needed once, before the first tag. The publish script aborts without the branch, and the index is
+only reachable over rate-limited `raw.githubusercontent.com` without Pages:
+
+```bash
+git switch --orphan gh-pages && git commit --allow-empty -m 'Initialise Helm repository'
+git push -u origin gh-pages && git switch main
+
+gh api -X POST repos/rak-phillip/remuda/pages \
+  -f 'source[branch]=gh-pages' -f 'source[path]=/'
+```
+
 ## Development
 
 ```bash

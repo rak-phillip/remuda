@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Set the release version in every file that carries it.
+
+Four files have to agree or the release fails its version check:
+
+  package.json                              the catalog image name and version
+  pkg/remuda/package.json                   the extension chart's name and version
+  deploy/chart/remuda-controller/Chart.yaml version and appVersion
+
+Deliberately does not commit or tag. The check in .github/workflows/release.yml
+is the enforcement; this is the convenience that stops the four drifting apart.
+
+    scripts/bump-version 0.2.0
+"""
+
+import json
+import re
+import sys
+from collections import OrderedDict
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CHART = ROOT / 'deploy/chart/remuda-controller/Chart.yaml'
+PACKAGES = [ROOT / 'package.json', ROOT / 'pkg/remuda/package.json']
+
+SEMVER = re.compile(r'^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')
+
+
+def set_package_version(path, version):
+    data = json.loads(path.read_text(), object_pairs_hook=OrderedDict)
+    before = data.get('version')
+    data['version'] = version
+    path.write_text(json.dumps(data, indent=2) + '\n')
+
+    return before
+
+
+def set_chart_version(path, version):
+    text = path.read_text()
+    before = re.search(r'^version:\s*(\S+)', text, re.M)
+
+    # Rewritten line-wise rather than through a YAML round-trip, to keep the
+    # file's comments and ordering exactly as they are.
+    text = re.sub(r'^version:.*$', f'version: {version}', text, count=1, flags=re.M)
+    text = re.sub(r'^appVersion:.*$', f'appVersion: "{version}"', text, count=1, flags=re.M)
+    path.write_text(text)
+
+    return before.group(1) if before else None
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit(f'usage: {sys.argv[0]} <version>    e.g. {sys.argv[0]} 0.2.0')
+
+    version = sys.argv[1].lstrip('v')
+
+    if not SEMVER.match(version):
+        sys.exit(f"'{version}' is not X.Y.Z")
+
+    for path in PACKAGES:
+        before = set_package_version(path, version)
+        print(f'  {path.relative_to(ROOT)}: {before} -> {version}')
+
+    before = set_chart_version(CHART, version)
+    print(f'  {CHART.relative_to(ROOT)}: {before} -> {version} (version and appVersion)')
+
+    print(f"""
+Next:
+
+  git commit -am 'Release {version}'
+  git tag v{version} && git push && git push --tags""")
+
+
+if __name__ == '__main__':
+    main()

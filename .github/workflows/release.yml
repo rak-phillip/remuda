@@ -1,0 +1,200 @@
+# One tag ships everything.
+#
+#   git tag v0.1.0 && git push --tags
+#
+# The Rancher extension tooling validates the release tag against
+# "<package name>-<version>" and cancels its own run when it does not match, so
+# the `version` job derives `remuda-0.1.0` from `v0.1.0` and passes that down.
+# The upstream scripts never see the `v` form.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Re-runnable from a tag ref. Dispatching from a branch builds nothing: the
+  # reusable workflows only publish when github.ref_type is 'tag'.
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./
+
+jobs:
+  version:
+    name: Derive and check the version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tagged_release: ${{ steps.v.outputs.tagged_release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: v
+        name: Derive the version and check every file agrees
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$tag' is not vX.Y.Z"
+            exit 1
+          fi
+
+          root=$(jq -r .version package.json)
+          pkg=$(jq -r .version pkg/remuda/package.json)
+          chart=$(yq -r .version deploy/chart/remuda-controller/Chart.yaml)
+          app=$(yq -r .appVersion deploy/chart/remuda-controller/Chart.yaml)
+
+          # Four files carry this version and all of them must agree. Without
+          # this check a mistyped tag is cancelled deep inside parse-tag-name
+          # with a confusing message, or publishes a chart whose version does
+          # not match the tag it was built from.
+          fail=0
+          for pair in "root package.json:$root" "pkg/remuda/package.json:$pkg" \
+                      "controller Chart.yaml version:$chart" "controller Chart.yaml appVersion:$app"; do
+            name="${pair%%:*}"; value="${pair##*:}"
+            if [[ "$value" != "$version" ]]; then
+              echo "::error::$name is $value, expected $version. Run scripts/bump-version $version"
+              fail=1
+            fi
+          done
+          [[ $fail -eq 0 ]] || exit 1
+
+          # The extension package name; what the Rancher scripts match against.
+          name=$(jq -r .name pkg/remuda/package.json)
+
+          echo "version=$version"                    >> "$GITHUB_OUTPUT"
+          echo "tagged_release=${name}-${version}"   >> "$GITHUB_OUTPUT"
+          echo "Releasing $version as ${name}-${version}"
+
+  # Publishes the Helm repository the Extensions screen installs from.
+  charts:
+    name: Extension chart
+    needs: version
+    uses: rancher/dashboard/.github/workflows/build-extension-charts.yml@master
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      target_branch: gh-pages
+      tagged_release: ${{ needs.version.outputs.tagged_release }}
+
+  # The air-gapped install path: Extensions -> Manage Extension Catalogs.
+  catalog:
+    name: Extension catalog image
+    needs: version
+    uses: rancher/dashboard/.github/workflows/build-extension-catalog.yml@master
+    permissions:
+      actions: write
+      contents: read
+      packages: write
+    with:
+      registry_target: ghcr.io
+      registry_user: ${{ github.actor }}
+      tagged_release: ${{ needs.version.outputs.tagged_release }}
+    secrets:
+      registry_token: ${{ secrets.GITHUB_TOKEN }}
+
+  controller-image:
+    name: Controller image
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/remuda-controller
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./controller
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Adds the controller chart to the same Helm repository, so one Index URL
+  # serves both. Strictly after `charts`: both jobs push to gh-pages, and
+  # running them together would race.
+  controller-chart:
+    name: Controller chart
+    needs: [version, charts, controller-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: source
+
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: pages
+          # Full history: the commit step rebases onto whatever the extension
+          # job just pushed, and `git pull --rebase` cannot work on a shallow
+          # clone.
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Package the chart and merge it into the index
+        working-directory: ./pages
+        run: |
+          set -euo pipefail
+
+          helm package ../source/deploy/chart/remuda-controller -d assets/remuda-controller
+
+          # --url assets/ keeps entries relative, matching what the extension
+          # publish writes; --merge preserves the extension's own entries.
+          merge=()
+          [[ -f index.yaml ]] && merge=(--merge index.yaml)
+          helm repo index assets --url assets/ "${merge[@]}"
+          mv assets/index.yaml index.yaml
+
+      - name: Commit
+        working-directory: ./pages
+        run: |
+          set -euo pipefail
+
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add assets index.yaml
+
+          if git diff --cached --quiet; then
+            echo "Nothing to publish; this version is already in the index."
+            exit 0
+          fi
+
+          git commit -m "Add remuda-controller ${{ needs.version.outputs.version }}"
+
+          # The extension job pushed to this branch moments ago, so rebase
+          # rather than assume the checkout is still current.
+          git pull --rebase origin gh-pages
+          git push origin gh-pages

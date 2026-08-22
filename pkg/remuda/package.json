@@ -1,6 +1,14 @@
 {
   "name": "remuda",
   "description": "Deploy a Rancher instance running a dashboard branch, so QA and design can review WIP work",
+  "icon": "https://raw.githubusercontent.com/rak-phillip/remuda/main/icon.svg",
+  "homepage": "https://github.com/rak-phillip/remuda",
+  "keywords": [
+    "rancher",
+    "dashboard",
+    "development",
+    "preview"
+  ],
   "version": "0.1.0",
   "private": false,
   "rancher": {

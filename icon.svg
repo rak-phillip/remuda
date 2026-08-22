@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Remuda">
+  <title>Remuda</title>
+  <!-- Solid ground so the mark reads on both light and dark extension cards. -->
+  <rect width="64" height="64" rx="14" fill="#2453FF"/>
+  <!-- A horseshoe: a remuda is the herd of spare mounts a crew draws from.
+       The opening stays wide, because a narrow gap reads as a ring at 24px. -->
+  <path d="M19.5 40.5 A13.9 13.9 0 1 1 44.5 40.5"
+        fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+</svg>

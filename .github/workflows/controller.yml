@@ -1,18 +1,14 @@
 name: Controller
 
+# CI only. Publishing the image and the chart lives in release.yml, so there is
+# exactly one place a tag turns into artifacts.
 on:
   push:
     branches: [main]
     paths: ['controller/**', 'deploy/chart/**', '.github/workflows/controller.yml']
   pull_request:
     paths: ['controller/**', 'deploy/chart/**', '.github/workflows/controller.yml']
-  release:
-    types: [released]
   workflow_dispatch:
-
-# The image is versioned in step with the chart, so a release publishes both.
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/remuda-controller
 
 defaults:
   run:
@@ -63,43 +59,3 @@ jobs:
       # Rendering catches template errors that lint alone lets through.
       - run: helm template remuda-controller ../deploy/chart/remuda-controller > /dev/null
 
-  image:
-    name: Build and push image
-    needs: [test, chart]
-    # Only publish from the canonical repo, and never from a fork's pull request.
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=short
-
-      - uses: docker/build-push-action@v6
-        with:
-          context: ./controller
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

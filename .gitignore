@@ -73,3 +73,10 @@ Thumbs.db
 dist-pkg
 # Go build output from `go build ./...` in controller/
 /controller/controller
+
+# Helm repository output from `yarn publish-pkgs`. These belong on gh-pages,
+# which is built by CI and has no .gitignore of its own, never on main.
+/assets
+/charts
+/extensions
+/index.yaml
