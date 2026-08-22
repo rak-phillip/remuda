@@ -77,6 +77,36 @@ describe('deleteEnvironment', () => {
   });
 });
 
+describe('deleteEnvironment sweeps pods', () => {
+  it('deletes pods, and does so before the PVCs they mount', async() => {
+    // Deleting a Job orphans its pods -- batch/v1 defaults to Orphan
+    // propagation -- and a surviving build pod holds the ui and cache claims
+    // via kubernetes.io/pvc-protection. The PVCs then never finalise and the
+    // environment's name can never be reused.
+    const deleted: string[] = [];
+    const store = {
+      dispatch: jest.fn(async(_a: string, opts: any) => {
+        if (opts.method === 'DELETE') {
+          deleted.push(opts.url);
+
+          return {};
+        }
+
+        return { data: [{ metadata: { name: 'multi-idp-build-1', labels: { [LABEL_NAME]: 'multi-idp' } } }] };
+      }),
+    };
+
+    await deleteEnvironment(store, 'local', { name: 'multi-idp', namespace: 'rancher-remuda' } as any);
+
+    const pod = deleted.findIndex((u) => u.includes(`/${ ENDPOINTS.pod }/`));
+    const pvc = deleted.findIndex((u) => u.includes(ENDPOINTS.persistentvolumeclaim));
+
+    expect(pod).toBeGreaterThan(-1);
+    expect(pvc).toBeGreaterThan(-1);
+    expect(pod).toBeLessThan(pvc);
+  });
+});
+
 describe('deleteEnvironment across clusters', () => {
   const owned = { metadata: { name: 'multi-idp-hop', labels: { [LABEL_NAME]: 'multi-idp' } } };
 

@@ -249,6 +249,16 @@ export async function installLocalPathStorage(store: any, clusterId: string): Pr
 /** Every kind an environment owns, in reverse dependency order. */
 const OWNED_ENDPOINTS = [
   ENDPOINTS.job,
+  // Pods are swept explicitly, and must go before the PVCs they mount.
+  //
+  // Deleting a Job through the API leaves its pods behind: batch/v1 defaults to
+  // Orphan propagation, so a completed build pod survives with no owner and
+  // nothing will ever collect it. It still references the ui and cache claims,
+  // so kubernetes.io/pvc-protection then blocks those PVCs from finalising --
+  // permanently, not just slowly. The environment's name stays unusable, with
+  // `object is being deleted: persistentvolumeclaims "<name>-ui" already exists`
+  // on every attempt to recreate it.
+  ENDPOINTS.pod,
   ENDPOINTS.ingress,
   ENDPOINTS.deployment,
   ENDPOINTS.service,

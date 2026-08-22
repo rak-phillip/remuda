@@ -121,6 +121,7 @@ export const DEFAULT_CACHE_SIZE_GB = 8;
 /** Steve endpoints, keyed by the shell's type constants. */
 export const ENDPOINTS = {
   namespace:             'namespaces',
+  pod:                   'pods',
   node:                  'nodes',
   configmap:             'configmaps',
   secret:                'secrets',
