@@ -10,9 +10,11 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ['controller/**', 'deploy/**', '**.md']
+    # deploy/** is not ignored: the controller chart carries a version that has
+    # to stay in step with the packages, and the check above is what enforces it.
+    paths-ignore: ['controller/**', '**.md']
   pull_request:
-    paths-ignore: ['controller/**', 'deploy/**', '**.md']
+    paths-ignore: ['controller/**', '**.md']
   workflow_dispatch:
 
 defaults:
@@ -28,6 +30,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+
+      # Catches a hand-edited version on the commit that caused it, rather than
+      # at tag time. v0.1.2's tag failed because the controller chart was left
+      # behind by a manual bump.
+      - name: Check every file agrees on a version
+        run: scripts/bump-version --check
 
       - run: corepack enable
 

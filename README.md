@@ -216,18 +216,40 @@ Two things worth knowing before installing:
 
 ## Releasing
 
-One tag ships everything:
+One command ships everything:
 
 ```bash
-scripts/bump-version 0.2.0
-git commit -am 'Release 0.2.0'
-git tag v0.2.0 && git push && git push --tags
+yarn version --new-version 0.2.0
+git push && git push --tags
 ```
+
+`yarn version` bumps the root `package.json`, then runs two lifecycle hooks before it commits:
+
+- **`preversion`** — `yarn lint && yarn test && yarn build-pkg remuda`. A version that does not build
+  never gets tagged. `v0.1.0` published an empty bundle because nothing checked this.
+- **`version`** — `scripts/bump-version --sync --stage`, which copies the new version into
+  `pkg/remuda/package.json` and the controller's `Chart.yaml`, and stages exactly those files.
+
+Yarn then commits all of it as `v0.2.0` and tags it, which is the tag `release.yml` triggers on.
+
+> Use `--new-version`. A bare `yarn version 0.2.0` ignores the argument and prompts instead.
 
 `scripts/bump-version` rewrites the version in the three files that carry it — the root
 `package.json`, `pkg/remuda/package.json`, and the controller's `Chart.yaml` (`version` and
-`appVersion`). `.github/workflows/release.yml` refuses to publish if any of them disagrees with the
-tag, so a mistyped tag fails immediately rather than halfway through.
+`appVersion`). **Use it rather than editing those by hand**; missing one is the easiest way to fail a
+release.
+
+The same script enforces this, so CI and the bump can never disagree about which files carry a
+version:
+
+```bash
+scripts/bump-version --check          # do they agree with each other?
+scripts/bump-version --check 0.2.0    # do they all equal 0.2.0?
+```
+
+CI runs the first form on every push, so a hand-edited version fails on the commit that caused it.
+`release.yml` runs the second against the tag, so a mistyped tag fails immediately rather than
+halfway through.
 
 The tag is `vX.Y.Z`, but the Rancher tooling matches on `<package name>-<version>`. The workflow
 derives `remuda-X.Y.Z` and passes that down; the upstream scripts never see the `v` form.

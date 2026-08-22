@@ -2,11 +2,11 @@ apiVersion: v2
 name: remuda-controller
 description: Keeps Remuda's cross-cluster hop pointing at current downstream node addresses.
 type: application
-version: 0.1.1
-appVersion: "0.1.1"
-home: https://github.com/rak-phillip/rancher-dev-envs
+version: 0.1.2
+appVersion: "0.1.2"
+home: https://github.com/rak-phillip/remuda
 sources:
-  - https://github.com/rak-phillip/rancher-dev-envs
+  - https://github.com/rak-phillip/remuda
 annotations:
   catalog.cattle.io/certified: rancher
   catalog.cattle.io/namespace: cattle-remuda-system
