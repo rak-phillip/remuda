@@ -14,6 +14,7 @@ import {
   backendImageForBranch, discoverDefaults, hostIngressDefaults, hostnameFor, ingressEntry, saveDefaults,
 } from '../utils/discovery';
 import { hopSupported } from '../utils/hop';
+import { isCloneableRepo } from '../utils/validate';
 import {
   BLANK_CLUSTER, DEFAULT_CACHE_SIZE_GB, DEFAULT_DATA_SIZE_GB, DEFAULT_NESTED_POD_CIDR,
   DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, HOST_CLUSTER_ID, REMUDA_NS, PRODUCT_NAME,
@@ -84,12 +85,19 @@ const hopUnavailable = computed(() => !targetsLocal.value && !!clusterId.value &
 /** The host ingress controller has to be one that can be told to go upstream over HTTPS. */
 const hopClassUnsupported = computed(() => !targetsLocal.value && !!hostIngressClass.value && !hopSupported(hostIngressClass.value));
 
+/**
+ * A repo the build cannot clone. Checked here because the alternative is finding
+ * out from a failed build Job several minutes after the form has been dismissed.
+ */
+const repoInvalid = computed(() => !!repo.value && !isCloneableRepo(repo.value));
+
 /** Surfaced because it means the hop leaves the VPC in plain sight. */
 const hopIsPublic = computed(() => hopEntry.value?.addressType === 'ExternalIP');
 
 const canSubmit = computed(() => !!(
   clusterId.value && name.value && repo.value && branch.value && baseDomain.value &&
-  ingressClass.value && !storageUnavailable.value && !hopUnavailable.value && !hopClassUnsupported.value
+  ingressClass.value && !storageUnavailable.value && !hopUnavailable.value &&
+  !hopClassUnsupported.value && !repoInvalid.value
 ));
 
 // Follow the branch until the user edits the image themselves.
@@ -350,6 +358,11 @@ onMounted(async() => {
           v-model:value="repo"
           :label="i18n.t('remuda.create.repoLabel')"
           :placeholder="i18n.t('remuda.create.repoPlaceholder')"
+        />
+        <Banner
+          v-if="repoInvalid"
+          color="error"
+          :label="i18n.t('remuda.warning.repoInvalid')"
         />
       </div>
       <div class="col span-6">

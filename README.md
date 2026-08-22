@@ -92,10 +92,13 @@ stops using a `10.43.0.10` that means two different things. Once the CIDRs are s
 actively wrong: the node's resolvers do not resolve `*.svc.cluster.local`, which is exactly what
 `CATTLE_UI_DASHBOARD_INDEX` points at.
 
-## Per-cluster prerequisites
+## Prerequisites
 
-1. **Wildcard DNS** for the base domain, pointing at the cluster's ingress. The base domain is
-   derived from the host Rancher's `server-url`, so for a Rancher at
+These are needed **once, on the management cluster** — the one serving this Rancher. A downstream
+cluster needs neither of them; see [Downstream clusters](#downstream-clusters).
+
+1. **Wildcard DNS** for the base domain, pointing at the management cluster's ingress. The base
+   domain is derived from the host Rancher's `server-url`, so for a Rancher at
    `https://example.ui.rancher.space` add `*.example.ui.rancher.space`.
 2. **A cert-manager `ClusterIssuer`.** A namespaced `Issuer` will not work — environments live in
    their own namespace.
@@ -117,6 +120,53 @@ Without an issuer an environment is still created, but with no TLS.
 > Let's Encrypt limits certificates per **registered domain** (50/week). Where many instances share
 > one domain, churning environments will eat into that shared budget. Use the staging ACME endpoint
 > for routine testing, or a DNS-01 wildcard certificate.
+
+### Downstream clusters
+
+An environment's hostname always comes off the management cluster's single wildcard, so that wildcard
+can never point at a downstream cluster. Rather than ask for a second DNS record per cluster, the
+extension creates a **hop** on the management cluster: a selector-less Service, an EndpointSlice
+carrying the downstream cluster's ingress addresses, and an Ingress for the environment's hostname
+(plus a `ServersTransport` where the management cluster runs traefik).
+
+The practical effect is that a downstream cluster needs **no wildcard DNS and no cert-manager** — TLS
+terminates on the management cluster. What it does need:
+
+- An **ingress controller reachable from outside the cluster on :443**, via a LoadBalancer Service, a
+  NodePort, or a host port. RKE2's bundled traefik qualifies as-is.
+- A **default StorageClass**. The create form offers to install local-path if there is none.
+
+Two consequences worth knowing:
+
+- **Hostnames are unique across every cluster at once**, because they all share one wildcard. The
+  create form refuses a name already claimed.
+- **The hop uses the node's public address** where it has one, so traffic between the two clusters
+  leaves the VPC. It is encrypted, but the downstream ingress serves its own self-signed certificate
+  and the management cluster does not verify it. Treat these environments as exposed. The create form
+  says so, naming the address.
+
+> The hop is repaired automatically only while an environment's detail page is open **and in the
+> foreground** — browsers throttle timers in background tabs. If a downstream node is replaced while
+> nobody is looking, the environment stays unreachable until that page is opened again, or until
+> someone presses **Re-sync networking**.
+
+### remuda-controller (optional)
+
+`controller/` is a small Go controller that removes that condition, reconciling every hop on the
+management cluster whether or not anyone is looking. It writes EndpointSlices and nothing else —
+the split is that **the UI discovers topology once at create; the controller refreshes addresses
+forever** — and it reads downstream node addresses from `nodes.management.cattle.io`, so it needs no
+downstream credentials.
+
+It ships as its own chart, separate from the UIPlugin chart, because that one is regenerated from an
+upstream template on every publish and cannot carry extra templates:
+
+```bash
+helm install remuda-controller ./deploy/chart/remuda-controller -n cattle-remuda-system --create-namespace
+```
+
+Everything works without it; the hop is simply repaired only while a detail page is in the
+foreground. See `controller/README.md`.
 
 ## Resource cost
 

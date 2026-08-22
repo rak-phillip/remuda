@@ -1,0 +1,26 @@
+image:
+  repository: ghcr.io/rak-phillip/remuda-controller
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Namespace the environments and their hop objects live in. Must match the
+# extension's REMUDA_NS; changing one without the other silently does nothing.
+namespace: rancher-remuda
+
+# How often every hop is reconciled. Node replacement takes minutes, so there is
+# nothing to gain from going much below this.
+interval: 30s
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

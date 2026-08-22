@@ -290,6 +290,9 @@ onUnmounted(() => clearInterval(timer));
           <dt>{{ i18n.t('remuda.detail.hopAddressType') }}</dt>
           <dd><code>{{ hop.addressType }}</code></dd>
         </dl>
+        <p class="text-muted">
+          {{ i18n.t('remuda.detail.hopSelfHealHint') }}
+        </p>
       </template>
 
       <p class="text-muted">

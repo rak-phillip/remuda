@@ -71,3 +71,5 @@ Thumbs.db
 
 # Locally built assets (extensions)
 dist-pkg
+# Go build output from `go build ./...` in controller/
+/controller/controller

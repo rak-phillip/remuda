@@ -1,0 +1,62 @@
+# Cluster-scoped read of the mirrored downstream nodes. This is the whole reason
+# the controller needs no downstream credentials: Rancher publishes every
+# cluster's node addresses here, namespaced by cluster ID.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "remuda-controller.name" . }}
+  labels:
+    {{- include "remuda-controller.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["management.cattle.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "remuda-controller.name" . }}
+  labels:
+    {{- include "remuda-controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "remuda-controller.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "remuda-controller.name" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Everything else is namespaced to where the hops live, and deliberately narrow:
+# Services are only ever read, and EndpointSlices are the sole thing written.
+# The Ingress and ServersTransport stay the extension's to own.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "remuda-controller.name" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "remuda-controller.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "remuda-controller.name" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "remuda-controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "remuda-controller.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "remuda-controller.name" . }}
+    namespace: {{ .Release.Namespace }}

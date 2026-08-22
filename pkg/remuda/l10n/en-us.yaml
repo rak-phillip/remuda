@@ -77,6 +77,11 @@ remuda:
       This environment's cluster reports different ingress addresses than the
       management cluster is sending traffic to, which usually means a node was
       replaced. Re-syncing now.
+    hopSelfHealHint: >-
+      Networking is re-checked every 15 seconds while this page is open and in
+      the foreground. Browsers throttle background tabs, so an environment whose
+      node is replaced while nobody is looking stays unreachable until this page
+      is opened again.
     buildLogHint: Build logs are on the build job's pod in the target cluster.
     peek: Debug proxy
 
@@ -101,6 +106,10 @@ remuda:
       No cert-manager ClusterIssuer was found on the cluster that terminates TLS
       for this environment, so it will be created without TLS and browsers will
       warn on every visit.
+    repoInvalid: >-
+      This does not look like a repository the build can clone. It needs the
+      repository name as well as the owner, for example
+      https://github.com/rancher/dashboard.
     noIngressEntry: >-
       Could not find an ingress controller on this cluster that is reachable from
       outside it, so the environment could not be given a working address. It
