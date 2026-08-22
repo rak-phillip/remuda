@@ -14,6 +14,7 @@ const spec: RemudaSpec = {
   branch:        'task/17295-multi-idp',
   backendImage:  'rancher/rancher:head',
   hostname:      'multi-idp.prak-bf3b08bd.ui.rancher.space',
+  clusterId:     'c-m-dff2ssd2',
   owner:         'prak',
   createdAt:     '2026-08-21T00:00:00.000Z',
   namespace:     'rancher-remuda',

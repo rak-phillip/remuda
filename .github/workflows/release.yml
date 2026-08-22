@@ -72,10 +72,48 @@ jobs:
           echo "tagged_release=${name}-${version}"   >> "$GITHUB_OUTPUT"
           echo "Releasing $version as ${name}-${version}"
 
+  # The publish script does not propagate a failed extension build -- it packages
+  # an empty bundle and reports success, so a release can look green while
+  # shipping no JavaScript. v0.1.0 did exactly that. Building here first is what
+  # stops it happening again.
+  verify:
+    name: Lint, test and build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - run: corepack enable
+
+      - uses: actions/setup-node@v5
+        with:
+          cache: yarn
+          node-version-file: '.nvmrc'
+
+      - run: yarn install --frozen-lockfile
+      - run: yarn lint
+      - run: yarn test
+      - run: yarn build-pkg remuda
+
+      - name: Check the bundle is not empty
+        run: |
+          set -euo pipefail
+
+          version=$(jq -r .version pkg/remuda/package.json)
+          bundle="dist-pkg/remuda-${version}/remuda-${version}.umd.min.js"
+
+          if [[ ! -s "$bundle" ]]; then
+            echo "::error::$bundle is missing or empty. Refusing to publish an extension with no code."
+            exit 1
+          fi
+
+          echo "$bundle is $(stat -c%s "$bundle") bytes"
+
   # Publishes the Helm repository the Extensions screen installs from.
   charts:
     name: Extension chart
-    needs: version
+    needs: [version, verify]
     uses: rancher/dashboard/.github/workflows/build-extension-charts.yml@master
     permissions:
       contents: write
@@ -87,7 +125,7 @@ jobs:
   # The air-gapped install path: Extensions -> Manage Extension Catalogs.
   catalog:
     name: Extension catalog image
-    needs: version
+    needs: [version, verify]
     uses: rancher/dashboard/.github/workflows/build-extension-catalog.yml@master
     permissions:
       actions: write
@@ -102,7 +140,7 @@ jobs:
 
   controller-image:
     name: Controller image
-    needs: version
+    needs: [version, verify]
     runs-on: ubuntu-latest
     permissions:
       contents: read

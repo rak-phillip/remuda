@@ -1,0 +1,59 @@
+# Lint, test and *build* the extension.
+#
+# The build is the part that matters here. `yarn test` runs through babel, which
+# strips types without checking them, so type errors are invisible to it -- and
+# the upstream publish script does not propagate a failed build, it packages an
+# empty bundle and carries on. A release therefore looks green while shipping an
+# extension with no JavaScript in it. Building here is what makes that loud.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['controller/**', 'deploy/**', '**.md']
+  pull_request:
+    paths-ignore: ['controller/**', 'deploy/**', '**.md']
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./
+
+jobs:
+  verify:
+    name: Lint, test and build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - run: corepack enable
+
+      - uses: actions/setup-node@v5
+        with:
+          cache: yarn
+          node-version-file: '.nvmrc'
+
+      - run: yarn install --frozen-lockfile
+      - run: yarn lint
+      - run: yarn test
+
+      - name: Build the extension
+        run: yarn build-pkg remuda
+
+      - name: Check the bundle is not empty
+        run: |
+          set -euo pipefail
+
+          version=$(jq -r .version pkg/remuda/package.json)
+          bundle="dist-pkg/remuda-${version}/remuda-${version}.umd.min.js"
+
+          if [[ ! -s "$bundle" ]]; then
+            echo "::error::$bundle is missing or empty. The build produced no extension code."
+            ls -la "dist-pkg/remuda-${version}" || true
+            exit 1
+          fi
+
+          echo "$bundle is $(stat -c%s "$bundle") bytes"

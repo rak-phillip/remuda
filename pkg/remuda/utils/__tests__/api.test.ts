@@ -140,7 +140,7 @@ describe('deleteEnvironment across clusters', () => {
 });
 
 describe('hostnameTaken', () => {
-  const asking = (rows: any[]) => ({ dispatch: jest.fn(async() => ({ data: rows })) });
+  const asking = (rows: any[]) => ({ dispatch: jest.fn(async(..._args: any[]) => ({ data: rows })) });
 
   it('looks on the host cluster, where every hostname lands', async() => {
     const store = asking([{ spec: { rules: [{ host: 'multi-idp.example.com' }] } }]);
