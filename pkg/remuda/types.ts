@@ -1,3 +1,52 @@
+/** Where a cluster's ingress controller answers HTTPS from outside the cluster. */
+export interface IngressEntry {
+  addresses: string[];
+  addressType: 'ExternalIP' | 'InternalIP';
+  port: number;
+}
+
+/**
+ * How an environment on a downstream cluster is reached.
+ *
+ * The hostname always comes off the host Rancher's own wildcard (see
+ * baseDomainFromServerUrl), so it only ever resolves to the host cluster's
+ * ingress. For a downstream target that means the Ingress created next to the
+ * workload is correct and simply never receives traffic; the host cluster has
+ * to front it. Set only for downstream targets -- on `local` the environment's
+ * own Ingress is already on the right cluster.
+ */
+export interface HopSpec {
+  /** Cluster the wildcard resolves to, i.e. HOST_CLUSTER_ID. */
+  hostClusterId: string;
+  /** Cluster the workload actually runs on. */
+  targetClusterId: string;
+  /**
+   * Downstream ingress entry addresses. The only part of the topology that
+   * drifts -- replacing a node changes it -- so it is re-resolved and rewritten
+   * rather than trusted for the environment's lifetime.
+   */
+  addresses: string[];
+  /**
+   * Which address family was picked, surfaced in the UI because the two have
+   * very different security properties: an ExternalIP hop leaves the VPC.
+   */
+  addressType: 'ExternalIP' | 'InternalIP';
+  /**
+   * Always the downstream ingress's *HTTPS* entry point.
+   *
+   * Not :80. Traefik rewrites inbound X-Forwarded-* from an untrusted peer, so a
+   * hop arriving on :80 reaches Rancher as X-Forwarded-Proto: http no matter what
+   * the host sent, and Rancher redirects to https -- straight back to the same
+   * URL, forever. Arriving on :443 lets the downstream ingress terminate TLS and
+   * set the header itself, which is exactly what makes it work on `local`.
+   */
+  port: number;
+  /** Host cluster's ingress class, not the target's. */
+  ingressClass: string;
+  /** Host cluster's ClusterIssuer. TLS terminates here, so the target needs none. */
+  clusterIssuer?: string;
+}
+
 /** Everything needed to render a dev environment's manifests. */
 export interface RemudaSpec {
   name: string;
@@ -10,6 +59,11 @@ export interface RemudaSpec {
   hostname: string;
   owner: string;
   createdAt: string;
+
+  /** Cluster the environment runs on. */
+  clusterId: string;
+  /** Present only when clusterId is not the host cluster. */
+  hop?: HopSpec;
 
   namespace: string;
   ingressClass: string;

@@ -8,11 +8,13 @@ import AsyncButton from '@shell/components/AsyncButton.vue';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import {
-  deleteEnvironment, list, readEnvironments, rebuildUi, resourceUrl
+  deleteEnvironment, hopAddresses, list, readEnvironments, rebuildUi, resourceUrl, resyncHop
 } from '../utils/api';
+import { ingressEntry } from '../utils/discovery';
+import { hopHasDrifted } from '../utils/hop';
 import { environmentUrl, resourceBase } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
-import type { RemudaSpec } from '../types';
+import type { IngressEntry, RemudaSpec } from '../types';
 
 const store = useStore();
 const route = useRoute();
@@ -30,6 +32,10 @@ const revealed = ref(false);
 const backendReady = ref(false);
 const jobs = ref<any[]>([]);
 const confirmDelete = ref<any>(null);
+// Both sides of the drift comparison, refreshed on every poll: what the target
+// cluster says its ingress is, and what the hop is actually dialling.
+const liveEntry = ref<IngressEntry | undefined>(undefined);
+const activeAddresses = ref<string[]>([]);
 let timer: any = null;
 
 const url = computed(() => (spec.value ? environmentUrl(spec.value) : ''));
@@ -57,6 +63,10 @@ const buildState = computed(() => {
  * useful for checking the pod answers at all. It is not a usable way to browse
  * the nested UI -- absolute /dashboard and /v1 paths break under a path prefix.
  */
+const hop = computed(() => spec.value?.hop);
+const hopDrifted = computed(() => hopHasDrifted(activeAddresses.value, liveEntry.value?.addresses || []));
+const hopIsPublic = computed(() => hop.value?.addressType === 'ExternalIP');
+
 const peekUrl = computed(() => (spec.value ? `/k8s/clusters/${ clusterId }/api/v1/namespaces/${ spec.value.namespace }/services/http:${ spec.value.name }:80/proxy/` : ''));
 
 async function loadPassword(env: RemudaSpec) {
@@ -94,10 +104,67 @@ async function load() {
     if (!password.value) {
       await loadPassword(found);
     }
+
+    await refreshHop(found);
   } catch (e: any) {
     error.value = e?.message || i18n.t('remuda.error.loadFailed');
   } finally {
     loading.value = false;
+  }
+}
+
+/**
+ * Notice, and quietly repair, a hop pointing at a node that no longer exists.
+ *
+ * Replacing a downstream node changes the addresses the hop dials and nothing
+ * else, so the fix is to rewrite one EndpointSlice. Folded into the existing
+ * poll rather than made a separate concern: an environment that has silently
+ * stopped answering is exactly what someone opens this page to find out about.
+ *
+ * This only self-heals while the page is open, which is the whole reason a
+ * controller is worth building later.
+ */
+async function refreshHop(env: RemudaSpec) {
+  if (!env.hop) {
+    return;
+  }
+
+  const [entry, active] = await Promise.all([
+    ingressEntry(store, env.hop.targetClusterId, env.ingressClass),
+    hopAddresses(store, env),
+  ]);
+
+  liveEntry.value = entry;
+  activeAddresses.value = active;
+
+  if (!hopHasDrifted(active, entry?.addresses || [])) {
+    return;
+  }
+
+  try {
+    await resyncHop(store, env, entry as IngressEntry);
+    activeAddresses.value = entry?.addresses || [];
+  } catch {
+    // Reported by the button, not by the poll -- a background repair that
+    // failed should not replace whatever the user is currently reading.
+  }
+}
+
+async function resync(cb: (ok: boolean) => void) {
+  try {
+    const env = spec.value as RemudaSpec;
+    const entry = await ingressEntry(store, env.hop?.targetClusterId || '', env.ingressClass);
+
+    if (!entry || !await resyncHop(store, env, entry)) {
+      throw new Error(i18n.t('remuda.error.resyncFailed'));
+    }
+
+    liveEntry.value = entry;
+    activeAddresses.value = entry.addresses;
+    cb(true);
+  } catch (e: any) {
+    error.value = e?.message || i18n.t('remuda.error.resyncFailed');
+    cb(false);
   }
 }
 
@@ -204,6 +271,27 @@ onUnmounted(() => clearInterval(timer));
         </dd>
       </dl>
 
+      <template v-if="hop">
+        <h3>{{ i18n.t('remuda.detail.networking') }}</h3>
+        <Banner
+          v-if="hopDrifted"
+          color="warning"
+          :label="i18n.t('remuda.detail.hopDrifted')"
+        />
+        <Banner
+          v-else-if="hopIsPublic"
+          color="info"
+          :label="i18n.t('remuda.warning.hopIsPublic', { address: hop.addresses.join(', ') })"
+        />
+        <dl class="remuda-facts">
+          <dt>{{ i18n.t('remuda.detail.hopRoute') }}</dt>
+          <dd><code>{{ hop.hostClusterId }} &rarr; {{ (activeAddresses.length ? activeAddresses : hop.addresses).join(', ') }}:{{ hop.port }}</code></dd>
+
+          <dt>{{ i18n.t('remuda.detail.hopAddressType') }}</dt>
+          <dd><code>{{ hop.addressType }}</code></dd>
+        </dl>
+      </template>
+
       <p class="text-muted">
         {{ i18n.t('remuda.detail.buildLogHint') }}
       </p>
@@ -221,6 +309,14 @@ onUnmounted(() => clearInterval(timer));
           :waiting-label="i18n.t('remuda.detail.rebuilding')"
           :success-label="i18n.t('remuda.detail.rebuild')"
           @click="rebuild"
+        />
+        <AsyncButton
+          v-if="hop"
+          mode="apply"
+          :action-label="i18n.t('remuda.detail.resync')"
+          :waiting-label="i18n.t('remuda.detail.resyncing')"
+          :success-label="i18n.t('remuda.detail.resync')"
+          @click="resync"
         />
         <AsyncButton
           mode="delete"

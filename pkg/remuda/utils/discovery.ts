@@ -1,9 +1,9 @@
 import {
   CONFIG_MAP_NAME, DEFAULT_BACKEND_IMAGE, DEFAULT_NESTED_POD_CIDR, DEFAULT_NESTED_SERVICE_CIDR,
-  REMUDA_NS, ENDPOINTS, NESTED_CIDR_CANDIDATES,
+  REMUDA_NS, ENDPOINTS, HOST_CLUSTER_ID, NESTED_CIDR_CANDIDATES,
 } from './constants';
 import { create, list } from './api';
-import type { ClusterDefaults } from '../types';
+import type { ClusterDefaults, IngressEntry } from '../types';
 
 /**
  * The wildcard DNS record is created under the host Rancher's own domain, so
@@ -239,6 +239,129 @@ async function savedDefaults(store: any, clusterId: string): Promise<Partial<Clu
   } catch {
     return {};
   }
+}
+
+/**
+ * Address a hop should dial to reach a downstream ingress.
+ *
+ * ExternalIP is preferred, which is the opposite of what seems safest and was
+ * measured the hard way: from the host cluster, the downstream node's InternalIP
+ * (10.0.12.23, alongside the host's own 10.0.16.140) times out on every port.
+ * The two are not one routable network merely because both sit inside 10.0.0.0/16
+ * -- node-driver nodes get their own VPC. Meanwhile a node that has *no*
+ * ExternalIP is by construction on a private network, which is exactly when
+ * InternalIP is both the only and the correct answer. So: take the public address
+ * when there is one, and record which was taken so the UI can say that the hop
+ * leaves the VPC.
+ */
+async function nodeAddresses(store: any, clusterId: string): Promise<Pick<IngressEntry, 'addresses' | 'addressType'>> {
+  const res = await store.dispatch('management/request', { url: `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.node }` });
+  const nodes = res?.data || [];
+  const ofType = (type: string) => nodes
+    .map((n: any) => (n?.status?.addresses || []).find((a: any) => a.type === type)?.address)
+    .filter(Boolean);
+
+  const external = ofType('ExternalIP');
+
+  return external.length ? { addresses: external, addressType: 'ExternalIP' } : { addresses: ofType('InternalIP'), addressType: 'InternalIP' };
+}
+
+/** An ingress controller's own Service or DaemonSet, found by ingress class name. */
+const namedForClass = (objects: any[], ingressClass: string) => {
+  const needle = (ingressClass || '').toLowerCase();
+
+  return objects.filter((o: any) => {
+    const name = (o?.metadata?.name || '').toLowerCase();
+    const app = (o?.metadata?.labels?.['app.kubernetes.io/name'] || '').toLowerCase();
+
+    return !!needle && (name.includes(needle) || app.includes(needle));
+  });
+};
+
+const httpsPort = (ports: any[]) => (ports || []).find((p: any) => p.name === 'websecure' || p.name === 'https' || p.port === 443 || p.containerPort === 8443);
+
+/**
+ * Where a cluster's ingress controller can be reached from outside it.
+ *
+ * Always the HTTPS entry point -- a hop to :80 cannot work, see HopSpec.port.
+ * The three cases are tried in descending order of stability, each swallowing
+ * its own failure the way firstIngressClass() and storageClasses() do, because
+ * a cluster that answers none of them should degrade to "could not tell" rather
+ * than block a create.
+ *
+ * On RKE2 it is the third case: rke2-traefik is a DaemonSet with hostPort 443
+ * behind a ClusterIP Service, because the RKE2 cloud provider runs with
+ * --controllers=*,-service and so a LoadBalancer Service would never be filled in.
+ */
+export async function ingressEntry(store: any, clusterId: string, ingressClass: string): Promise<IngressEntry | undefined> {
+  const read = async(endpoint: string) => {
+    try {
+      const res = await store.dispatch('management/request', { url: `/k8s/clusters/${ clusterId }/v1/${ endpoint }` });
+
+      return res?.data || [];
+    } catch {
+      return [];
+    }
+  };
+
+  try {
+    const [services, daemonsets] = await Promise.all([read(ENDPOINTS.service), read(ENDPOINTS.daemonset)]);
+    const candidates = namedForClass(services, ingressClass);
+
+    // 1. A real load balancer. Stable, and the only case that does not drift.
+    for (const svc of candidates) {
+      const address = (svc?.status?.loadBalancer?.ingress || [])
+        .map((i: any) => i.ip || i.hostname)
+        .filter(Boolean);
+      const port = httpsPort(svc?.spec?.ports);
+
+      if (svc?.spec?.type === 'LoadBalancer' && address.length && port) {
+        return {
+          addresses: address, addressType: 'ExternalIP', port: port.port || 443
+        };
+      }
+    }
+
+    // 2. NodePort. Node addresses, and the port the controller was assigned.
+    for (const svc of candidates) {
+      const port = httpsPort(svc?.spec?.ports);
+
+      if (svc?.spec?.type === 'NodePort' && port?.nodePort) {
+        return { ...await nodeAddresses(store, clusterId), port: port.nodePort };
+      }
+    }
+
+    // 3. hostPort DaemonSet. The controller is bound straight onto the nodes.
+    for (const ds of namedForClass(daemonsets, ingressClass)) {
+      const containers = ds?.spec?.template?.spec?.containers || [];
+      const port = containers
+        .flatMap((c: any) => c.ports || [])
+        .find((p: any) => p.hostPort === 443 || p.name === 'websecure');
+
+      if (port?.hostPort) {
+        return { ...await nodeAddresses(store, clusterId), port: port.hostPort };
+      }
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The *host* cluster's ingress class and issuer, for the hop's own Ingress.
+ *
+ * TLS terminates on the host, so these are read there and not on the target --
+ * which is why a downstream cluster needs no cert-manager at all.
+ */
+export async function hostIngressDefaults(store: any): Promise<{ ingressClass: string; clusterIssuer?: string }> {
+  const [ingressClass, clusterIssuer] = await Promise.all([
+    firstIngressClass(store, HOST_CLUSTER_ID),
+    firstClusterIssuer(store, HOST_CLUSTER_ID),
+  ]);
+
+  return { ingressClass, clusterIssuer };
 }
 
 export async function discoverDefaults(store: any, clusterId: string): Promise<ClusterDefaults> {

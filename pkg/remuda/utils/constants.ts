@@ -12,9 +12,28 @@ export const LABEL_NAME = 'remuda.rancher.io/name';
 export const LABEL_OWNER = 'remuda.rancher.io/owner';
 export const LABEL_ROLE = 'remuda.rancher.io/role';
 
+/**
+ * Recorded on the hop objects so the host cluster is self-describing.
+ *
+ * The environment's own record lives in a ConfigMap on the *target* cluster, so
+ * anything reconciling the hop from the host cluster -- the Detail page's poll
+ * today, a controller later -- would otherwise need a second cluster's
+ * credentials just to learn where to point.
+ */
+export const LABEL_TARGET_CLUSTER = 'remuda.rancher.io/target-cluster';
+export const LABEL_ENTRY_PORT = 'remuda.rancher.io/entry-port';
+
 export const ROLE_BACKEND = 'backend';
 export const ROLE_UI = 'ui';
 export const ROLE_BUILD = 'build';
+export const ROLE_HOP = 'hop';
+
+/**
+ * The cluster the wildcard DNS record actually points at, which is the Rancher
+ * serving this extension. Environments on any other cluster are fronted from
+ * here -- see utils/hop.ts.
+ */
+export const HOST_CLUSTER_ID = 'local';
 
 /**
  * Path the built dashboard bundle is served under. The bundle is built into a
@@ -118,4 +137,7 @@ export const ENDPOINTS = {
   role:                  'rbac.authorization.k8s.io.roles',
   rolebinding:           'rbac.authorization.k8s.io.rolebindings',
   clusterissuer:         'cert-manager.io.clusterissuers',
+  daemonset:             'apps.daemonsets',
+  endpointslice:         'discovery.k8s.io.endpointslices',
+  serverstransport:      'traefik.io.serverstransports',
 } as const;

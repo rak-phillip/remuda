@@ -9,13 +9,16 @@ import AdvancedSection from '@shell/components/AdvancedSection.vue';
 import LabeledInput from '@components/Form/LabeledInput/LabeledInput.vue';
 import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
 import { useText } from '../utils/i18n';
-import { createEnvironment, installLocalPathStorage, readyClusters } from '../utils/api';
-import { backendImageForBranch, discoverDefaults, hostnameFor, saveDefaults } from '../utils/discovery';
+import { createEnvironment, hostnameTaken, installLocalPathStorage, readyClusters } from '../utils/api';
+import {
+  backendImageForBranch, discoverDefaults, hostIngressDefaults, hostnameFor, ingressEntry, saveDefaults,
+} from '../utils/discovery';
+import { hopSupported } from '../utils/hop';
 import {
   BLANK_CLUSTER, DEFAULT_CACHE_SIZE_GB, DEFAULT_DATA_SIZE_GB, DEFAULT_NESTED_POD_CIDR,
-  DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, REMUDA_NS, PRODUCT_NAME,
+  DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, HOST_CLUSTER_ID, REMUDA_NS, PRODUCT_NAME,
 } from '../utils/constants';
-import type { RemudaSpec } from '../types';
+import type { IngressEntry, RemudaSpec } from '../types';
 
 const store = useStore();
 const router = useRouter();
@@ -41,6 +44,12 @@ const clusterIssuer = ref('');
 const hasStorageClass = ref(true);
 const installingStorage = ref(false);
 
+// How a downstream environment will be fronted from the host cluster. Resolved
+// once, at create -- see HopSpec.
+const hopEntry = ref<IngressEntry | undefined>(undefined);
+const hostIngressClass = ref('');
+const hostClusterIssuer = ref('');
+
 // Chosen against the host cluster's own ranges when defaults are discovered.
 const nestedPodCidr = ref(DEFAULT_NESTED_POD_CIDR);
 const nestedServiceCidr = ref(DEFAULT_NESTED_SERVICE_CIDR);
@@ -61,9 +70,26 @@ const hostname = computed(() => (name.value && baseDomain.value ? hostnameFor(na
  */
 const storageUnavailable = computed(() => !hasStorageClass.value && !storageClass.value);
 
+/**
+ * TLS terminates wherever the wildcard actually resolves, which for a downstream
+ * target is the host cluster and not the target. So the issuer that matters --
+ * and the one to warn about -- moves with it. A downstream cluster needs no
+ * cert-manager at all.
+ */
+const effectiveIssuer = computed(() => (targetsLocal.value ? clusterIssuer.value : hostClusterIssuer.value));
+
+/** A downstream target whose entry point could not be found cannot be fronted. */
+const hopUnavailable = computed(() => !targetsLocal.value && !!clusterId.value && !hopEntry.value);
+
+/** The host ingress controller has to be one that can be told to go upstream over HTTPS. */
+const hopClassUnsupported = computed(() => !targetsLocal.value && !!hostIngressClass.value && !hopSupported(hostIngressClass.value));
+
+/** Surfaced because it means the hop leaves the VPC in plain sight. */
+const hopIsPublic = computed(() => hopEntry.value?.addressType === 'ExternalIP');
+
 const canSubmit = computed(() => !!(
   clusterId.value && name.value && repo.value && branch.value && baseDomain.value &&
-  ingressClass.value && !storageUnavailable.value
+  ingressClass.value && !storageUnavailable.value && !hopUnavailable.value && !hopClassUnsupported.value
 ));
 
 // Follow the branch until the user edits the image themselves.
@@ -94,20 +120,57 @@ async function loadDefaults() {
   if (!backendTouched.value) {
     backendImage.value = backendImageForBranch(branch.value, serverVersion.value);
   }
+
+  await loadHopDefaults(defaults.ingressClass);
+}
+
+/**
+ * Everything the host cluster needs to front this environment.
+ *
+ * Only for a downstream target: on `local` the environment's own Ingress is
+ * already on the cluster the wildcard resolves to.
+ */
+async function loadHopDefaults(targetIngressClass: string) {
+  hopEntry.value = undefined;
+  hostIngressClass.value = '';
+  hostClusterIssuer.value = '';
+
+  if (targetsLocal.value || !clusterId.value) {
+    return;
+  }
+
+  const [host, entry] = await Promise.all([
+    hostIngressDefaults(store),
+    ingressEntry(store, clusterId.value, targetIngressClass),
+  ]);
+
+  hostIngressClass.value = host.ingressClass;
+  hostClusterIssuer.value = host.clusterIssuer || '';
+  hopEntry.value = entry;
 }
 
 watch(clusterId, loadDefaults);
 
 function buildSpec(): RemudaSpec {
   return {
-    name:          name.value,
-    repo:          repo.value,
-    branch:        branch.value,
-    backendImage:  backendImage.value,
-    hostname:      hostname.value,
-    owner:         store.getters['auth/principalId']?.split('//')?.pop() || 'unknown',
-    createdAt:     new Date().toISOString(),
-    namespace:     REMUDA_NS,
+    name:         name.value,
+    repo:         repo.value,
+    branch:       branch.value,
+    backendImage: backendImage.value,
+    hostname:     hostname.value,
+    owner:        store.getters['auth/principalId']?.split('//')?.pop() || 'unknown',
+    createdAt:    new Date().toISOString(),
+    namespace:    REMUDA_NS,
+    clusterId:    clusterId.value,
+    hop:          targetsLocal.value || !hopEntry.value ? undefined : {
+      hostClusterId:   HOST_CLUSTER_ID,
+      targetClusterId: clusterId.value,
+      addresses:       hopEntry.value.addresses,
+      addressType:     hopEntry.value.addressType,
+      port:            hopEntry.value.port,
+      ingressClass:    hostIngressClass.value,
+      clusterIssuer:   hostClusterIssuer.value || undefined,
+    },
     ingressClass:  ingressClass.value,
     storageClass:  storageClass.value || undefined,
     clusterIssuer: clusterIssuer.value || undefined,
@@ -131,6 +194,17 @@ function generatePassword(): string {
 
 async function submit(cb: (ok: boolean) => void) {
   try {
+    // Hostnames all come off one wildcard, so they are unique across every
+    // target cluster, not just within one. Checked here rather than left to the
+    // API because the collision surfaces on the *host* cluster, which is not
+    // where the user thinks they are creating anything.
+    if (await hostnameTaken(store, hostname.value)) {
+      error.value = i18n.t('remuda.error.hostnameTaken');
+      cb(false);
+
+      return;
+    }
+
     await createEnvironment(store, clusterId.value, buildSpec(), generatePassword());
     // Persist what was used so the next create on this cluster prefills. The
     // environment already exists by this point, so a failure here must not be
@@ -227,9 +301,24 @@ onMounted(async() => {
       </div>
     </Banner>
     <Banner
-      v-if="!clusterIssuer"
+      v-if="!effectiveIssuer"
       color="warning"
       :label="i18n.t('remuda.warning.noIssuer')"
+    />
+    <Banner
+      v-if="hopUnavailable"
+      color="error"
+      :label="i18n.t('remuda.warning.noIngressEntry')"
+    />
+    <Banner
+      v-if="hopClassUnsupported"
+      color="error"
+      :label="i18n.t('remuda.warning.hopClassUnsupported', { ingressClass: hostIngressClass })"
+    />
+    <Banner
+      v-else-if="hopIsPublic"
+      color="warning"
+      :label="i18n.t('remuda.warning.hopIsPublic', { address: hopEntry?.addresses?.join(', ') })"
     />
     <Banner
       v-if="!baseDomain"

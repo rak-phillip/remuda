@@ -68,6 +68,15 @@ remuda:
     rebuild: Rebuild UI
     rebuilding: Rebuilding
     delete: Delete
+    networking: Networking
+    hopRoute: Route
+    hopAddressType: Address type
+    resync: Re-sync networking
+    resyncing: Re-syncing
+    hopDrifted: >-
+      This environment's cluster reports different ingress addresses than the
+      management cluster is sending traffic to, which usually means a node was
+      replaced. Re-syncing now.
     buildLogHint: Build logs are on the build job's pod in the target cluster.
     peek: Debug proxy
 
@@ -89,8 +98,24 @@ remuda:
       bound and the build will not start. Install node-local storage below, or
       name a class of your own under Show Advanced.
     noIssuer: >-
-      No cert-manager ClusterIssuer was found on this cluster, so the environment
-      will be created without TLS and browsers will warn on every visit.
+      No cert-manager ClusterIssuer was found on the cluster that terminates TLS
+      for this environment, so it will be created without TLS and browsers will
+      warn on every visit.
+    noIngressEntry: >-
+      Could not find an ingress controller on this cluster that is reachable from
+      outside it, so the environment could not be given a working address. It
+      needs an ingress controller answering HTTPS on a LoadBalancer, a NodePort or
+      a host port.
+    hopClassUnsupported: >-
+      The management cluster's ingress controller ({ingressClass}) cannot be told
+      to reach a backend over HTTPS without verifying its certificate, which is
+      what fronting an environment on another cluster requires. traefik and nginx
+      both can.
+    hopIsPublic: >-
+      This environment will be reached over its cluster's public address
+      ({address}). Traffic between the two clusters is encrypted but its
+      certificate is not verified, so treat the environment as exposed and do not
+      put anything sensitive in it.
     noBaseDomain: >-
       No base domain could be derived. Set one below, and make sure a wildcard DNS
       record points at this cluster's ingress.
@@ -101,3 +126,8 @@ remuda:
     deleteFailed: Could not delete the environment
     rebuildFailed: Could not start the rebuild
     storageInstallFailed: Could not install local-path storage on this cluster
+    hostnameTaken: >-
+      Another environment already uses this hostname. Names are shared across
+      every cluster, because they all come from one wildcard DNS record -- pick a
+      different one.
+    resyncFailed: Could not re-sync this environment's networking

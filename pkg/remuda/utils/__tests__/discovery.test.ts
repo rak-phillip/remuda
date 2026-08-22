@@ -1,8 +1,8 @@
 import {
   backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, discoverDefaults, hostnameFor,
-  pickNestedCidrs, saveDefaults, widenToSixteen,
+  ingressEntry, pickNestedCidrs, saveDefaults, widenToSixteen,
 } from '../discovery';
-import { DEFAULT_BACKEND_IMAGE } from '../constants';
+import { DEFAULT_BACKEND_IMAGE, ENDPOINTS } from '../constants';
 
 describe('baseDomainFromServerUrl', () => {
   it.each([
@@ -233,5 +233,120 @@ describe('discoverDefaults storage detection', () => {
     const out = await discoverDefaults(storeWith('error'), 'c-m-abc');
 
     expect(out.hasStorageClass).toBe(true);
+  });
+});
+
+describe('ingressEntry', () => {
+  const nodes = (addresses: any[]) => ({ data: [{ status: { addresses } }] });
+
+  function clusterWith({ services = [], daemonsets = [], nodeAddresses = [] }: any) {
+    return {
+      dispatch: jest.fn(async(_a: string, opts: any) => {
+        if (opts.url.includes(ENDPOINTS.daemonset)) {
+          return { data: daemonsets };
+        }
+        if (opts.url.includes(ENDPOINTS.node)) {
+          return nodes(nodeAddresses);
+        }
+        if (opts.url.includes(ENDPOINTS.service)) {
+          return { data: services };
+        }
+
+        return { data: [] };
+      }),
+    };
+  }
+
+  const bothAddresses = [
+    { type: 'InternalIP', address: '10.0.12.23' },
+    { type: 'ExternalIP', address: '52.12.200.3' },
+    { type: 'Hostname', address: 'prak-test3-pool1' },
+  ];
+
+  it('prefers the public address, because the private one is not routable', async() => {
+    // Measured, not assumed: from the host cluster the downstream node's
+    // 10.0.12.23 times out on every port even though the host's own address is
+    // 10.0.16.140. Sharing 10.0.0.0/16 does not make two VPCs one network.
+    const store = clusterWith({
+      daemonsets:    [{ metadata: { name: 'rke2-traefik' }, spec: { template: { spec: { containers: [{ ports: [{ name: 'websecure', hostPort: 443 }] }] } } } }],
+      nodeAddresses: bothAddresses,
+    });
+
+    expect(await ingressEntry(store, 'c-m-dff2ssd2', 'traefik')).toEqual({
+      addresses: ['52.12.200.3'], addressType: 'ExternalIP', port: 443,
+    });
+  });
+
+  it('falls back to the private address when there is no public one', async() => {
+    // A node with no ExternalIP is on a private network by construction, which
+    // is exactly when InternalIP is both the only and the correct answer.
+    const store = clusterWith({
+      daemonsets:    [{ metadata: { name: 'rke2-traefik' }, spec: { template: { spec: { containers: [{ ports: [{ name: 'websecure', hostPort: 443 }] }] } } } }],
+      nodeAddresses: [{ type: 'InternalIP', address: '10.0.12.23' }],
+    });
+
+    expect(await ingressEntry(store, 'c-m-dff2ssd2', 'traefik')).toEqual({
+      addresses: ['10.0.12.23'], addressType: 'InternalIP', port: 443,
+    });
+  });
+
+  it('takes a LoadBalancer ahead of anything node-bound', async() => {
+    const store = clusterWith({
+      services: [{
+        metadata: { name: 'traefik' },
+        spec:     { type: 'LoadBalancer', ports: [{ name: 'https', port: 443 }] },
+        status:   { loadBalancer: { ingress: [{ ip: '203.0.113.5' }] } },
+      }],
+      daemonsets:    [{ metadata: { name: 'traefik' }, spec: { template: { spec: { containers: [{ ports: [{ hostPort: 443 }] }] } } } }],
+      nodeAddresses: bothAddresses,
+    });
+
+    expect((await ingressEntry(store, 'c-m-x', 'traefik'))?.addresses).toEqual(['203.0.113.5']);
+  });
+
+  it('uses the assigned nodePort when the controller is a NodePort Service', async() => {
+    const store = clusterWith({
+      services: [{
+        metadata: { name: 'ingress-nginx-controller' },
+        spec:     {
+          type:  'NodePort',
+          ports: [{
+            name: 'https', port: 443, nodePort: 31443
+          }]
+        }
+      }],
+      nodeAddresses: bothAddresses,
+    });
+
+    expect(await ingressEntry(store, 'c-m-x', 'nginx')).toEqual({
+      addresses: ['52.12.200.3'], addressType: 'ExternalIP', port: 31443,
+    });
+  });
+
+  it('ignores services belonging to some other controller', async() => {
+    const store = clusterWith({
+      services: [{
+        metadata: { name: 'rancher-monitoring' },
+        spec:     {
+          type:  'NodePort',
+          ports: [{
+            name: 'https', port: 443, nodePort: 31999
+          }]
+        }
+      }],
+      nodeAddresses: bothAddresses,
+    });
+
+    expect(await ingressEntry(store, 'c-m-x', 'traefik')).toBeUndefined();
+  });
+
+  it('reports "could not tell" rather than throwing', async() => {
+    const store = {
+      dispatch: jest.fn(async() => {
+        throw new Error('403');
+      })
+    };
+
+    expect(await ingressEntry(store, 'c-m-x', 'traefik')).toBeUndefined();
   });
 });
