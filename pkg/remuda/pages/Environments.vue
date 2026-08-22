@@ -7,6 +7,7 @@ import Banner from '@components/Banner/Banner.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
+import EmptyState from '../components/EmptyState.vue';
 import { deleteEnvironment, list, readEnvironments, readyClusters } from '../utils/api';
 import { environmentUrl } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
@@ -153,11 +154,21 @@ onUnmounted(() => clearInterval(timer));
       color="error"
       :label="error"
     />
-    <Banner
+    <EmptyState
       v-if="isEmpty"
-      color="info"
-      :label="i18n.t('remuda.list.empty')"
-    />
+      icon="circle-plus"
+      :title="i18n.t('remuda.list.emptyTitle')"
+      :description="i18n.t('remuda.list.empty')"
+    >
+      <template #actions>
+        <RcButton
+          variant="primary"
+          @click="goCreate"
+        >
+          {{ i18n.t('remuda.list.createAction') }}
+        </RcButton>
+      </template>
+    </EmptyState>
 
     <table
       v-if="rows.length"

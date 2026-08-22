@@ -9,8 +9,12 @@ remuda:
   list:
     title: Dev Environments
     subtitle: Rancher instances running a dashboard branch, for QA and design review.
-    empty: No dev environments yet.
+    emptyTitle: No dev environments yet
+    empty: >-
+      An environment runs a Rancher instance built from a dashboard branch, so QA
+      and design can review work in progress at a shareable URL.
     createAction: Create
+    delete: Delete
     columns:
       name: Name
       cluster: Cluster
