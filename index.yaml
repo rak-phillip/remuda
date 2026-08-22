@@ -14,7 +14,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.1.0
-    created: "2026-08-22T21:13:10.385395996Z"
+    created: "2026-08-22T21:13:36.766658022Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: 647bf18d1f516795e9bd63b831ff82685141c27ae42e242577150a403da4cf26
@@ -30,4 +30,23 @@ entries:
     urls:
     - assets/remuda/remuda-0.1.0.tgz
     version: 0.1.0
-generated: "2026-08-22T21:13:10.384557688Z"
+  remuda-controller:
+  - annotations:
+      catalog.cattle.io/certified: rancher
+      catalog.cattle.io/namespace: cattle-remuda-system
+      catalog.cattle.io/release-name: remuda-controller
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2026-08-22T21:13:36.766880003Z"
+    description: Keeps Remuda's cross-cluster hop pointing at current downstream node
+      addresses.
+    digest: bc844b05d0507f1d2976d2c3ff72b60a58b96f664e65e0c609d3c8be540ccb5b
+    home: https://github.com/rak-phillip/rancher-dev-envs
+    name: remuda-controller
+    sources:
+    - https://github.com/rak-phillip/rancher-dev-envs
+    type: application
+    urls:
+    - assets/remuda-controller/remuda-controller-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-08-22T21:13:36.766264858Z"
