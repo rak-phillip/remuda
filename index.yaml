@@ -14,7 +14,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.1.2
-    created: "2026-08-22T22:17:56.775556236Z"
+    created: "2026-08-22T22:18:25.776997263Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: 43b6a79d7c848671a47c8e84392a6fccdcd9c01f382c021c488eb4053db38af3
@@ -43,7 +43,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.1.1
-    created: "2026-08-22T21:26:21.347482835Z"
+    created: "2026-08-22T22:18:25.776756252Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: 0813189280688387f4a119c9c17510b2ad4a0e2b2c7026d8fd68d5698d607045
@@ -72,7 +72,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.1.0
-    created: "2026-08-22T21:26:21.347227127Z"
+    created: "2026-08-22T22:18:25.77649311Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: 647bf18d1f516795e9bd63b831ff82685141c27ae42e242577150a403da4cf26
@@ -94,8 +94,26 @@ entries:
       catalog.cattle.io/namespace: cattle-remuda-system
       catalog.cattle.io/release-name: remuda-controller
     apiVersion: v2
+    appVersion: 0.1.2
+    created: "2026-08-22T22:18:25.777693464Z"
+    description: Keeps Remuda's cross-cluster hop pointing at current downstream node
+      addresses.
+    digest: 0c6919d4ac31d969112a9c686635a4a57d7010eab1268c4d7f77a8b0548bf20e
+    home: https://github.com/rak-phillip/remuda
+    name: remuda-controller
+    sources:
+    - https://github.com/rak-phillip/remuda
+    type: application
+    urls:
+    - assets/remuda-controller/remuda-controller-0.1.2.tgz
+    version: 0.1.2
+  - annotations:
+      catalog.cattle.io/certified: rancher
+      catalog.cattle.io/namespace: cattle-remuda-system
+      catalog.cattle.io/release-name: remuda-controller
+    apiVersion: v2
     appVersion: 0.1.1
-    created: "2026-08-22T21:26:21.347974024Z"
+    created: "2026-08-22T22:18:25.777467532Z"
     description: Keeps Remuda's cross-cluster hop pointing at current downstream node
       addresses.
     digest: 76f3f8e63fb1238b913b2f6b85a5b94031f515af72500a9769b56afbea7a0fb4
@@ -113,7 +131,7 @@ entries:
       catalog.cattle.io/release-name: remuda-controller
     apiVersion: v2
     appVersion: 0.1.0
-    created: "2026-08-22T21:26:21.34771563Z"
+    created: "2026-08-22T22:18:25.777243844Z"
     description: Keeps Remuda's cross-cluster hop pointing at current downstream node
       addresses.
     digest: bc844b05d0507f1d2976d2c3ff72b60a58b96f664e65e0c609d3c8be540ccb5b
@@ -125,4 +143,4 @@ entries:
     urls:
     - assets/remuda-controller/remuda-controller-0.1.0.tgz
     version: 0.1.0
-generated: "2026-08-22T22:17:56.775126734Z"
+generated: "2026-08-22T22:18:25.776114011Z"
