@@ -4,7 +4,7 @@ import { useStore } from 'vuex';
 import { useRouter } from 'vue-router';
 import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
-import AsyncButton from '@shell/components/AsyncButton.vue';
+import RcButton from '@components/RcButton/RcButton.vue';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import EmptyState from '../components/EmptyState.vue';
@@ -212,11 +212,13 @@ onUnmounted(() => clearInterval(timer));
             >{{ row.spec.hostname }}</a>
           </td>
           <td>
-            <AsyncButton
-              mode="delete"
-              size="sm"
-              @click="(cb) => { cb(true); askDelete(row); }"
-            />
+            <RcButton
+              size="small"
+              class="bg-error"
+              @click="askDelete(row)"
+            >
+              {{ i18n.t('remuda.list.delete') }}
+            </RcButton>
           </td>
         </tr>
       </tbody>
