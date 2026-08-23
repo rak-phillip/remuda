@@ -3,8 +3,8 @@
  *
  * Deliberately shape-only: it cannot tell whether a repository exists, and it is
  * not trying to. It catches the mistake that actually happens -- pasting an
- * owner URL like `https://github.com/rak-phillip` with no repository name, which
- * clones as `https://github.com/rak-phillip/` and fails with "Not Found". That
+ * owner URL like `https://github.com/rancher` with no repository name, which
+ * clones as `https://github.com/rancher/` and fails with "Not Found". That
  * failure otherwise surfaces several minutes later as a failed build Job, long
  * after the create form has been dismissed.
  */

@@ -46,13 +46,13 @@ remuda:
   create:
     title: Create Dev Environment
     nameLabel: Name
-    namePlaceholder: multi-idp
+    namePlaceholder: my-feature
     nameHint: Used as the subdomain and as the name of every object created.
     clusterLabel: Target cluster
     repoLabel: Repository
-    repoPlaceholder: https://github.com/rak-phillip/dashboard
+    repoPlaceholder: https://github.com/rancher/dashboard
     branchLabel: Branch
-    branchPlaceholder: task/17295-multi-idp
+    branchPlaceholder: feature/my-branch
     gitSecretLabel: Git token secret
     gitSecretHint: Only needed for a private fork. Secret must hold a "token" key.
     backendLabel: Rancher server image

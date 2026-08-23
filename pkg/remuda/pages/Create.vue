@@ -8,6 +8,8 @@ import AsyncButton from '@shell/components/AsyncButton.vue';
 import AdvancedSection from '@shell/components/AdvancedSection.vue';
 import LabeledInput from '@components/Form/LabeledInput/LabeledInput.vue';
 import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
+import { useFormValidation } from '@shell/composables/useFormValidation';
+import type { RuleSet } from '@shell/composables/useFormValidation';
 import { useText } from '../utils/i18n';
 import { createEnvironment, hostnameTaken, installLocalPathStorage, readyClusters } from '../utils/api';
 import {
@@ -24,6 +26,41 @@ import type { IngressEntry, RemudaSpec } from '../types';
 const store = useStore();
 const router = useRouter();
 const i18n = useText(store);
+
+/**
+ * Which fields the form cannot be submitted without.
+ *
+ * These four are the whole of it deliberately: everything else on the form is
+ * either discovered from the cluster and prefilled, or genuinely optional. The
+ * `translationKey` is what the shell's rule generator interpolates into the
+ * message, so the error names the field the way its label does.
+ */
+const ruleSets: RuleSet[] = [
+  {
+    path: 'clusterId', rules: ['required'], translationKey: 'remuda.create.clusterLabel'
+  },
+  {
+    path: 'name', rules: ['required'], translationKey: 'remuda.create.nameLabel'
+  },
+  {
+    path: 'repo', rules: ['required', 'cloneable'], translationKey: 'remuda.create.repoLabel'
+  },
+  {
+    path: 'branch', rules: ['required'], translationKey: 'remuda.create.branchLabel'
+  },
+];
+
+/**
+ * Shape-only reachability check, folded in as a field rule so the repository
+ * field has one error surface rather than a rule message and a separate banner
+ * saying different things about the same input. Named `cloneable` because the
+ * shell resolves extra rules by function name.
+ */
+const cloneable = (value: any): string | undefined => (
+  !value || isCloneableRepo(value) ? undefined : i18n.t('remuda.warning.repoInvalid')
+);
+
+const { getRules, isFormValid } = useFormValidation(i18n.t as any, ruleSets, { cloneable });
 
 const loading = ref(true);
 const error = ref('');
@@ -85,19 +122,18 @@ const hopUnavailable = computed(() => !targetsLocal.value && !!clusterId.value &
 /** The host ingress controller has to be one that can be told to go upstream over HTTPS. */
 const hopClassUnsupported = computed(() => !targetsLocal.value && !!hostIngressClass.value && !hopSupported(hostIngressClass.value));
 
-/**
- * A repo the build cannot clone. Checked here because the alternative is finding
- * out from a failed build Job several minutes after the form has been dismissed.
- */
-const repoInvalid = computed(() => !!repo.value && !isCloneableRepo(repo.value));
-
 /** Surfaced because it means the hop leaves the VPC in plain sight. */
 const hopIsPublic = computed(() => hopEntry.value?.addressType === 'ExternalIP');
 
-const canSubmit = computed(() => !!(
-  clusterId.value && name.value && repo.value && branch.value && baseDomain.value &&
-  ingressClass.value && !storageUnavailable.value && !hopUnavailable.value &&
-  !hopClassUnsupported.value && !repoInvalid.value
+/**
+ * Two separate things gate the button. `isFormValid` covers the fields the user
+ * types, and is vee-validate's business. The rest are conditions of the target
+ * cluster -- no storage class, no reachable ingress -- which no field can be
+ * corrected to satisfy, so they stay here and are explained by their banners.
+ */
+const canSubmit = computed(() => isFormValid.value && !!(
+  baseDomain.value && ingressClass.value &&
+  !storageUnavailable.value && !hopUnavailable.value && !hopClassUnsupported.value
 ));
 
 // Follow the branch until the user edits the image themselves.
@@ -338,6 +374,8 @@ onMounted(async() => {
       <div class="col span-6">
         <LabeledSelect
           v-model:value="clusterId"
+          name="clusterId"
+          :rules="getRules('clusterId')"
           :label="i18n.t('remuda.create.clusterLabel')"
           :options="clusterOptions"
         />
@@ -345,6 +383,8 @@ onMounted(async() => {
       <div class="col span-6">
         <LabeledInput
           v-model:value="name"
+          name="name"
+          :rules="getRules('name')"
           :label="i18n.t('remuda.create.nameLabel')"
           :placeholder="i18n.t('remuda.create.namePlaceholder')"
           :tooltip="i18n.t('remuda.create.nameHint')"
@@ -356,18 +396,17 @@ onMounted(async() => {
       <div class="col span-6">
         <LabeledInput
           v-model:value="repo"
+          name="repo"
+          :rules="getRules('repo')"
           :label="i18n.t('remuda.create.repoLabel')"
           :placeholder="i18n.t('remuda.create.repoPlaceholder')"
-        />
-        <Banner
-          v-if="repoInvalid"
-          color="error"
-          :label="i18n.t('remuda.warning.repoInvalid')"
         />
       </div>
       <div class="col span-6">
         <LabeledInput
           v-model:value="branch"
+          name="branch"
+          :rules="getRules('branch')"
           :label="i18n.t('remuda.create.branchLabel')"
           :placeholder="i18n.t('remuda.create.branchPlaceholder')"
         />

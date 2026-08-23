@@ -50,12 +50,12 @@ export interface HopSpec {
 /** Everything needed to render a dev environment's manifests. */
 export interface RemudaSpec {
   name: string;
-  /** Clone URL, e.g. https://github.com/rak-phillip/dashboard */
+  /** Clone URL, e.g. https://github.com/rancher/dashboard */
   repo: string;
   branch: string;
   /** Rancher server image for the backend. */
   backendImage: string;
-  /** Fully qualified host, e.g. multi-idp.prak-bf3b08bd.ui.rancher.space */
+  /** Fully qualified host, e.g. my-feature.rancher.example.com */
   hostname: string;
   owner: string;
   createdAt: string;
