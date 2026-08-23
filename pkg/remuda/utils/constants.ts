@@ -126,6 +126,36 @@ export const DEFAULT_DATA_SIZE_GB = 20;
 export const DEFAULT_UI_SIZE_GB = 2;
 export const DEFAULT_CACHE_SIZE_GB = 8;
 
+/**
+ * How much of a repository's branch list to fetch, all at once, up front.
+ *
+ * Ten pages of 100 rather than one, because substring matching can only ever
+ * find what has actually been fetched. GitHub's REST API has no substring search
+ * -- matching-refs takes a prefix, and the GraphQL `refs(query:)` that does the
+ * real thing answers 403 unauthenticated -- so the only way to match "17295"
+ * against "task/17295-multi-idp" is to hold the whole list and filter it here.
+ *
+ * The cost is paid once per repository, not per keystroke: 495 branches (the
+ * largest real case measured) is 5 of the 60 hourly requests, and filtering
+ * afterwards is instant and offline. A repository past the cap falls back to the
+ * prefix search below.
+ */
+export const GITHUB_PER_PAGE = 100;
+export const GITHUB_BRANCH_PAGES = 10;
+
+/**
+ * Shortest branch prefix worth sending to GitHub.
+ *
+ * Only used for a repository whose branch list was truncated at the cap above;
+ * anything smaller is filtered locally. Guards two things: the rate limit, and
+ * the fact that an empty ref makes matching-refs return every ref in the
+ * repository.
+ */
+export const GITHUB_BRANCH_SEARCH_MIN = 2;
+
+/** How long to wait after the last keystroke before asking GitHub anything. */
+export const GITHUB_DEBOUNCE_MS = 600;
+
 /** Steve endpoints, keyed by the shell's type constants. */
 export const ENDPOINTS = {
   namespace:             'namespaces',

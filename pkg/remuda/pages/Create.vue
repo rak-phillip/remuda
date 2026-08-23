@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import {
+  computed, onMounted, onUnmounted, ref, watch
+} from 'vue';
 import { useStore } from 'vuex';
 import { useRouter } from 'vue-router';
 import Loading from '@shell/components/Loading.vue';
@@ -17,9 +19,12 @@ import {
 } from '../utils/discovery';
 import { hopSupported } from '../utils/hop';
 import { isCloneableRepo } from '../utils/validate';
+import { checkRepo, listBranches, parseGitHubRepo, searchBranches } from '../utils/github';
+import type { RepoCheck } from '../utils/github';
 import {
   BLANK_CLUSTER, DEFAULT_CACHE_SIZE_GB, DEFAULT_DATA_SIZE_GB, DEFAULT_NESTED_POD_CIDR,
-  DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, HOST_CLUSTER_ID, REMUDA_NS, PRODUCT_NAME,
+  DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, GITHUB_DEBOUNCE_MS, HOST_CLUSTER_ID, REMUDA_NS,
+  PRODUCT_NAME,
 } from '../utils/constants';
 import type { IngressEntry, RemudaSpec } from '../types';
 
@@ -74,6 +79,28 @@ const gitSecretName = ref('');
 const backendImage = ref('');
 const backendTouched = ref(false);
 
+/**
+ * What GitHub says about the repository, and the branches it offers.
+ *
+ * Advisory throughout. `isCloneableRepo` stays the only hard gate on the field,
+ * because this can be wrong for reasons that have nothing to do with the input:
+ * a private fork looks identical to a missing repo without credentials, a repo
+ * on any other host cannot be checked at all, and the unauthenticated API runs
+ * out after 60 requests an hour per IP.
+ */
+const repoCheck = ref<RepoCheck | 'idle' | 'checking' | 'skipped'>('idle');
+const branches = ref<string[]>([]);
+/**
+ * Prefix matches for what is currently typed. Only ever populated for a
+ * repository too large to hold in full -- otherwise `branches` already has
+ * everything and vue-select filters it locally by substring.
+ */
+const branchMatches = ref<string[]>([]);
+/** True when the repository has more branches than the fetch cap allowed. */
+const branchesTruncated = ref(false);
+let repoTimer: any = null;
+let branchTimer: any = null;
+
 const baseDomain = ref('');
 const serverVersion = ref('');
 const ingressClass = ref('');
@@ -121,6 +148,26 @@ const hopUnavailable = computed(() => !targetsLocal.value && !!clusterId.value &
 
 /** The host ingress controller has to be one that can be told to go upstream over HTTPS. */
 const hopClassUnsupported = computed(() => !targetsLocal.value && !!hostIngressClass.value && !hopSupported(hostIngressClass.value));
+
+/** One line under the repository field. Empty when there is nothing to say. */
+const repoStatus = computed(() => {
+  switch (repoCheck.value) {
+  case 'checking':
+    return i18n.t('remuda.create.repoChecking');
+  case 'ok':
+    if (!branches.value.length) {
+      return i18n.t('remuda.create.repoFound');
+    }
+
+    return branchesTruncated.value ? i18n.t('remuda.create.repoFoundBranchesTruncated', { count: branches.value.length }) : i18n.t('remuda.create.repoFoundBranches', { count: branches.value.length });
+  case 'missing':
+    return i18n.t('remuda.create.repoMissing');
+  case 'skipped':
+    return i18n.t('remuda.create.repoNotChecked');
+  default:
+    return '';
+  }
+});
 
 /** Surfaced because it means the hop leaves the VPC in plain sight. */
 const hopIsPublic = computed(() => hopEntry.value?.addressType === 'ExternalIP');
@@ -194,6 +241,109 @@ async function loadHopDefaults(targetIngressClass: string) {
 }
 
 watch(clusterId, loadDefaults);
+
+/**
+ * Ask GitHub about the repository, debounced, and fill the branch list.
+ *
+ * Skipped outright when a Git token secret is named: that is the private-fork
+ * case, the check is unauthenticated, and GitHub answers 404 for a private repo
+ * exactly as it does for one that does not exist. Reporting "not found" there
+ * would be actively misleading, so the form says nothing instead and the field
+ * hint explains why.
+ */
+async function lookupRepo() {
+  const ref = parseGitHubRepo(repo.value);
+
+  branches.value = [];
+  branchMatches.value = [];
+  branchesTruncated.value = false;
+
+  if (!ref || !isCloneableRepo(repo.value)) {
+    repoCheck.value = 'idle';
+
+    return;
+  }
+
+  if (gitSecretName.value) {
+    repoCheck.value = 'skipped';
+
+    return;
+  }
+
+  repoCheck.value = 'checking';
+
+  const result = await checkRepo(ref);
+
+  // The field may have moved on while the request was in flight; a stale answer
+  // about a repository the user has already replaced is worse than none.
+  if (parseGitHubRepo(repo.value)?.repo !== ref.repo || parseGitHubRepo(repo.value)?.owner !== ref.owner) {
+    return;
+  }
+
+  repoCheck.value = result;
+
+  if (result === 'ok') {
+    const list = await listBranches(ref);
+
+    branches.value = list.names;
+    branchesTruncated.value = list.truncated;
+  }
+}
+
+watch([repo, gitSecretName], () => {
+  clearTimeout(repoTimer);
+  repoTimer = setTimeout(lookupRepo, GITHUB_DEBOUNCE_MS);
+});
+
+onUnmounted(() => {
+  clearTimeout(repoTimer);
+  clearTimeout(branchTimer);
+});
+
+/**
+ * Fallback for a repository with more branches than the fetch cap allowed.
+ *
+ * Prefix-only, because that is all matching-refs does, so it is strictly worse
+ * than the local substring filter it stands in for. It exists so that a branch
+ * past the cap can still be reached at all rather than looking as though it does
+ * not exist.
+ *
+ * `loading` is vue-select's own toggle, handed over by LabeledSelect's `search`
+ * event, so the dropdown shows a spinner rather than "no options" while the
+ * request is in flight.
+ */
+function onBranchSearch(query: string, loading?: (state: boolean) => void) {
+  const ref = parseGitHubRepo(repo.value);
+
+  clearTimeout(branchTimer);
+
+  // Nothing to ask for when the whole list is already here: vue-select filters
+  // it by substring locally, which is both instant and better than anything the
+  // API can do -- matching-refs only matches a prefix.
+  if (!ref || repoCheck.value !== 'ok' || !query || !branchesTruncated.value) {
+    return;
+  }
+
+  loading?.(true);
+
+  branchTimer = setTimeout(async() => {
+    try {
+      const found = await searchBranches(ref, query);
+
+      // Merged rather than replacing the browse list: the user may clear the
+      // box and expect the original suggestions back.
+      branchMatches.value = found;
+    } finally {
+      loading?.(false);
+    }
+  }, GITHUB_DEBOUNCE_MS);
+}
+
+/**
+ * Free-text field until GitHub offers something to choose from. Matches first,
+ * because they are what the user is currently typing towards.
+ */
+const branchOptions = computed(() => Array.from(new Set([...branchMatches.value, ...branches.value])));
 
 function buildSpec(): RemudaSpec {
   return {
@@ -400,10 +550,38 @@ onMounted(async() => {
           :rules="getRules('repo')"
           :label="i18n.t('remuda.create.repoLabel')"
           :placeholder="i18n.t('remuda.create.repoPlaceholder')"
+          :tooltip="i18n.t('remuda.create.repoHint')"
         />
+        <p
+          v-if="repoStatus"
+          class="remuda-field-note"
+          :class="{ 'remuda-field-note--error': repoCheck === 'missing' }"
+        >
+          {{ repoStatus }}
+        </p>
       </div>
       <div class="col span-6">
+        <!--
+          A select only once GitHub has actually returned branches, and taggable
+          even then: the list is capped, private and non-GitHub repositories
+          never populate it, and a branch that is missing from it still has to be
+          typeable.
+        -->
+        <LabeledSelect
+          v-if="branchOptions.length"
+          v-model:value="branch"
+          name="branch"
+          taggable
+          searchable
+          :rules="getRules('branch')"
+          :label="i18n.t('remuda.create.branchLabel')"
+          :placeholder="i18n.t('remuda.create.branchPlaceholder')"
+          :tooltip="i18n.t('remuda.create.branchHint')"
+          :options="branchOptions"
+          @search="onBranchSearch"
+        />
         <LabeledInput
+          v-else
           v-model:value="branch"
           name="branch"
           :rules="getRules('branch')"
@@ -509,6 +687,16 @@ onMounted(async() => {
 <style lang="scss" scoped>
 h3 {
   margin-bottom: 10px;
+}
+
+.remuda-field-note {
+  color: var(--input-label);
+  font-size: 12px;
+  margin: 4px 0 0;
+
+  &--error {
+    color: var(--error);
+  }
 }
 
 .remuda-banner {

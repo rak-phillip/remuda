@@ -6,6 +6,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@octokit/rest": "^22.0.1",
     "@rancher/shell": "^3.0.13"
   },
   "resolutions": {

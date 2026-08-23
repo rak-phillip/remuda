@@ -51,8 +51,31 @@ remuda:
     clusterLabel: Target cluster
     repoLabel: Repository
     repoPlaceholder: https://github.com/rancher/dashboard
+    repoHint: >-
+      Public repositories on github.com are checked as you type, and their
+      branches offered below. A private repository cannot be checked -- GitHub
+      answers the same way for one that does not exist -- so name its token
+      secret under Show Advanced and the check is skipped.
+    repoChecking: Checking repository...
+    repoFound: Repository found.
+    repoFoundBranches: Repository found, {count} branches. Type any part of a name to filter.
+    repoFoundBranchesTruncated: >-
+      Repository found. It has more than {count} branches, so the list is
+      partial -- type the start of a branch name to search the rest.
+    repoMissing: >-
+      No public repository at this address. If it is private, name its token
+      secret under Show Advanced -- the check is skipped for private
+      repositories and the branch cannot be verified here.
+    repoNotChecked: >-
+      Not checked. A token secret is named, so this is treated as a private
+      repository and is left to the build to resolve.
     branchLabel: Branch
     branchPlaceholder: feature/my-branch
+    branchHint: >-
+      Type any part of a branch name to filter the list. A repository large
+      enough to exceed the fetch limit is searched by the start of the name
+      instead, and says so above. Any branch name can be typed in full, listed
+      or not.
     gitSecretLabel: Git token secret
     gitSecretHint: Only needed for a private fork. Secret must hold a "token" key.
     backendLabel: Rancher server image
