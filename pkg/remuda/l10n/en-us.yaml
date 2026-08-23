@@ -53,15 +53,12 @@ remuda:
     repoPlaceholder: https://github.com/rancher/dashboard
     repoHint: >-
       Public repositories on github.com are checked as you type, and their
-      branches offered below. A private repository cannot be checked -- GitHub
+      branches offered in the Branch field. A private repository cannot be
+      checked -- GitHub
       answers the same way for one that does not exist -- so name its token
       secret under Show Advanced and the check is skipped.
     repoChecking: Checking repository...
     repoFound: Repository found.
-    repoFoundBranches: Repository found, {count} branches. Type any part of a name to filter.
-    repoFoundBranchesTruncated: >-
-      Repository found. It has more than {count} branches, so the list is
-      partial -- type the start of a branch name to search the rest.
     repoMissing: >-
       No public repository at this address. If it is private, name its token
       secret under Show Advanced -- the check is skipped for private
@@ -71,11 +68,15 @@ remuda:
       repository and is left to the build to resolve.
     branchLabel: Branch
     branchPlaceholder: feature/my-branch
+    branchesAvailable: '{count} branches.'
+    branchesPartial: >-
+      Showing {count} branches. The repository has more, so searching here
+      matches the start of a branch name.
     branchHint: >-
-      Type any part of a branch name to filter the list. A repository large
-      enough to exceed the fetch limit is searched by the start of the name
-      instead, and says so above. Any branch name can be typed in full, listed
-      or not.
+      Type any part of a branch name to filter the list. A repository with too
+      many branches to load in full is searched by the start of the name
+      instead. Any branch name can be typed in full, whether it is listed or
+      not.
     gitSecretLabel: Git token secret
     gitSecretHint: Only needed for a private fork. Secret must hold a "token" key.
     backendLabel: Rancher server image
@@ -119,10 +120,6 @@ remuda:
       The backend is shutting down. It holds the data volume until its pod is
       gone, so starting again before then leaves the new pod waiting on the
       volume.
-    incompleteHint: >-
-      An environment below was recorded but never finished being created, so
-      nothing is running for it. Delete it and create it again; the name stays
-      reserved until you do.
     incomplete: >-
       This environment was recorded but never finished being created, so nothing
       is running for it. Delete it and create it again.
@@ -158,7 +155,7 @@ remuda:
       Prefer a downstream cluster where one is available.
     noStorageClass: >-
       This cluster has no StorageClass, so the environment's volumes can never be
-      bound and the build will not start. Install node-local storage below, or
+      bound and the build will not start. Install node-local storage here, or
       name a class of your own under Show Advanced.
     noIssuer: >-
       No cert-manager ClusterIssuer was found on the cluster that terminates TLS

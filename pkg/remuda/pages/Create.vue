@@ -155,11 +155,7 @@ const repoStatus = computed(() => {
   case 'checking':
     return i18n.t('remuda.create.repoChecking');
   case 'ok':
-    if (!branches.value.length) {
-      return i18n.t('remuda.create.repoFound');
-    }
-
-    return branchesTruncated.value ? i18n.t('remuda.create.repoFoundBranchesTruncated', { count: branches.value.length }) : i18n.t('remuda.create.repoFoundBranches', { count: branches.value.length });
+    return i18n.t('remuda.create.repoFound');
   case 'missing':
     return i18n.t('remuda.create.repoMissing');
   case 'skipped':
@@ -167,6 +163,22 @@ const repoStatus = computed(() => {
   default:
     return '';
   }
+});
+
+/**
+ * How many branches are on offer, and whether that is all of them.
+ *
+ * Sits under the Branch field rather than the Repository one, because it
+ * describes the contents of that list and not the outcome of the repository
+ * lookup. The two notes divide cleanly: Repository answers "did we find it",
+ * Branch answers "what can you pick from".
+ */
+const branchStatus = computed(() => {
+  if (repoCheck.value !== 'ok' || !branches.value.length) {
+    return '';
+  }
+
+  return branchesTruncated.value ? i18n.t('remuda.create.branchesPartial', { count: branches.value.length }) : i18n.t('remuda.create.branchesAvailable', { count: branches.value.length });
 });
 
 /** Surfaced because it means the hop leaves the VPC in plain sight. */
@@ -301,6 +313,33 @@ onUnmounted(() => {
 });
 
 /**
+ * What is currently typed into the branch box, as opposed to what is committed.
+ *
+ * vue-select keeps these separate: its search text only becomes the field's
+ * value when an option is picked or Enter creates a tag. Blur alone discards it.
+ */
+const branchQuery = ref('');
+
+/**
+ * Commit a typed branch name that was never confirmed with Enter.
+ *
+ * Without this, typing `feature/foo` and going straight to Create submits an
+ * empty branch -- vue-select's `taggable` only creates the tag on Enter, and its
+ * blur handler just validates. That is fine for a picker, and wrong for a field
+ * whose whole point is that any branch name can be typed, listed or not.
+ *
+ * Selecting an option clears the search box first, so `branchQuery` is empty by
+ * the time blur fires and a real selection is never overwritten.
+ */
+function commitTypedBranch() {
+  const typed = branchQuery.value.trim();
+
+  if (typed && typed !== branch.value) {
+    branch.value = typed;
+  }
+}
+
+/**
  * Fallback for a repository with more branches than the fetch cap allowed.
  *
  * Prefix-only, because that is all matching-refs does, so it is strictly worse
@@ -315,6 +354,7 @@ onUnmounted(() => {
 function onBranchSearch(query: string, loading?: (state: boolean) => void) {
   const ref = parseGitHubRepo(repo.value);
 
+  branchQuery.value = query;
   clearTimeout(branchTimer);
 
   // Nothing to ask for when the whole list is already here: vue-select filters
@@ -562,13 +602,18 @@ onMounted(async() => {
       </div>
       <div class="col span-6">
         <!--
-          A select only once GitHub has actually returned branches, and taggable
-          even then: the list is capped, private and non-GitHub repositories
-          never populate it, and a branch that is missing from it still has to be
-          typeable.
+          One component for the whole life of the form, never swapped.
+          Previously this was a LabeledInput that became a LabeledSelect once
+          GitHub answered: a user typing their branch while that request was in
+          flight had the field replaced under them mid-word, losing what they had
+          typed and the caret with it.
+
+          So the select is here from the start and simply gains options later.
+          `taggable` is what keeps it a free-text field -- the list is capped,
+          and private and non-GitHub repositories never populate it at all, so a
+          branch that is not in the list still has to be typeable.
         -->
         <LabeledSelect
-          v-if="branchOptions.length"
           v-model:value="branch"
           name="branch"
           taggable
@@ -579,15 +624,14 @@ onMounted(async() => {
           :tooltip="i18n.t('remuda.create.branchHint')"
           :options="branchOptions"
           @search="onBranchSearch"
+          @on-blur="commitTypedBranch"
         />
-        <LabeledInput
-          v-else
-          v-model:value="branch"
-          name="branch"
-          :rules="getRules('branch')"
-          :label="i18n.t('remuda.create.branchLabel')"
-          :placeholder="i18n.t('remuda.create.branchPlaceholder')"
-        />
+        <p
+          v-if="branchStatus"
+          class="remuda-field-note"
+        >
+          {{ branchStatus }}
+        </p>
       </div>
     </div>
 
