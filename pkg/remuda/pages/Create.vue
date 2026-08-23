@@ -19,6 +19,7 @@ import {
 } from '../utils/discovery';
 import { hopSupported } from '../utils/hop';
 import { isCloneableRepo } from '../utils/validate';
+import { createBranchField } from '../utils/branch-field';
 import { checkRepo, listBranches, parseGitHubRepo, searchBranches } from '../utils/github';
 import type { RepoCheck } from '../utils/github';
 import {
@@ -313,31 +314,13 @@ onUnmounted(() => {
 });
 
 /**
- * What is currently typed into the branch box, as opposed to what is committed.
- *
- * vue-select keeps these separate: its search text only becomes the field's
- * value when an option is picked or Enter creates a tag. Blur alone discards it.
+ * The typed-vs-committed dance vue-select's `taggable` requires, and the reason
+ * `selecting` has to be wired as well as `on-blur`. See utils/branch-field.ts --
+ * it lives there so the event ordering can actually be tested.
  */
-const branchQuery = ref('');
-
-/**
- * Commit a typed branch name that was never confirmed with Enter.
- *
- * Without this, typing `feature/foo` and going straight to Create submits an
- * empty branch -- vue-select's `taggable` only creates the tag on Enter, and its
- * blur handler just validates. That is fine for a picker, and wrong for a field
- * whose whole point is that any branch name can be typed, listed or not.
- *
- * Selecting an option clears the search box first, so `branchQuery` is empty by
- * the time blur fires and a real selection is never overwritten.
- */
-function commitTypedBranch() {
-  const typed = branchQuery.value.trim();
-
-  if (typed && typed !== branch.value) {
-    branch.value = typed;
-  }
-}
+const branchField = createBranchField(() => branch.value, (value) => {
+  branch.value = value;
+});
 
 /**
  * Fallback for a repository with more branches than the fetch cap allowed.
@@ -354,7 +337,7 @@ function commitTypedBranch() {
 function onBranchSearch(query: string, loading?: (state: boolean) => void) {
   const ref = parseGitHubRepo(repo.value);
 
-  branchQuery.value = query;
+  branchField.search(query);
   clearTimeout(branchTimer);
 
   // Nothing to ask for when the whole list is already here: vue-select filters
@@ -624,7 +607,8 @@ onMounted(async() => {
           :tooltip="i18n.t('remuda.create.branchHint')"
           :options="branchOptions"
           @search="onBranchSearch"
-          @on-blur="commitTypedBranch"
+          @selecting="branchField.select()"
+          @on-blur="branchField.blur()"
         />
         <p
           v-if="branchStatus"
