@@ -110,12 +110,18 @@ export interface ManifestRequest {
 
 export type BuildState = 'building' | 'ready' | 'failed' | 'unknown';
 
+/**
+ * Whether an environment is running, derived from its backend Deployment rather
+ * than recorded in its spec. See runStateOf().
+ */
+export type RunState = 'ready' | 'pending' | 'stopped' | 'stopping';
+
 /** A dev environment as presented in the list, merged from several resources. */
 export interface RemudaSummary {
   spec: RemudaSpec;
   clusterId: string;
   clusterName: string;
-  backendReady: boolean;
+  runState: RunState;
   buildState: BuildState;
   /** Record exists but the workload was never created. See isIncomplete(). */
   incomplete: boolean;

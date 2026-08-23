@@ -1,4 +1,4 @@
-import { buildStateOf, isIncomplete } from '../status';
+import { buildStateOf, isIncomplete, runStateOf } from '../status';
 import { INCOMPLETE_AFTER_MS, LABEL_NAME } from '../constants';
 import type { RemudaSpec } from '../../types';
 
@@ -60,5 +60,36 @@ describe('isIncomplete', () => {
   it('says nothing when the timestamp cannot be read', () => {
     expect(isIncomplete(spec(''), false, now)).toBe(false);
     expect(isIncomplete({ name: 'x' } as RemudaSpec, false, now)).toBe(false);
+  });
+});
+
+describe('runStateOf', () => {
+  const deployment = (spec: any, status: any = {}) => ({ spec, status });
+
+  it('is pending when there is no Deployment to read', () => {
+    expect(runStateOf(undefined)).toBe('pending');
+  });
+
+  it.each([
+    [{ replicas: 1 }, { readyReplicas: 1 }, 'ready'],
+    [{ replicas: 1 }, { readyReplicas: 0 }, 'pending'],
+    [{ replicas: 1 }, {}, 'pending'],
+    [{ replicas: 0 }, {}, 'stopped'],
+    [{ replicas: 0 }, { replicas: 0 }, 'stopped'],
+  ])('maps spec %p / status %p to %s', (spec, status, expected) => {
+    expect(runStateOf(deployment(spec, status))).toBe(expected);
+  });
+
+  it('separates a backend still terminating from one already gone', () => {
+    // The pod holds the RWO data volume until it is deleted, so a start issued
+    // in this window produces one stuck Pending on a volume still attached.
+    expect(runStateOf(deployment({ replicas: 0 }, { replicas: 1 }))).toBe('stopping');
+  });
+
+  it('assumes running when replicas is missing entirely', () => {
+    // The API server defaults it to 1; reading absence as stopped would offer a
+    // Start button for a healthy environment, which is the damaging way to be
+    // wrong here.
+    expect(runStateOf(deployment({}, { readyReplicas: 1 }))).toBe('ready');
   });
 });

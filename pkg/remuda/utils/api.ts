@@ -225,6 +225,66 @@ export async function rebuildUi(store: any, clusterId: string, spec: RemudaSpec)
 }
 
 /**
+ * Stop or start an environment by scaling both of its Deployments.
+ *
+ * Everything else is deliberately left in place -- the PVCs, the Services, the
+ * Ingress and the hop. A stopped environment therefore keeps its data, its
+ * hostname and its bootstrap password, and gives back only what actually costs
+ * something while idle: the backend's CPU and memory, and the node the RWO
+ * volumes pin its pods to. Its URL answers 503 until it is started again.
+ *
+ * Order matters in one direction only. nginx comes up first on a start so the
+ * bundle is already being served by the time the backend fetches
+ * ui-dashboard-index; that fetch is not a one-shot (see CATTLE_UI_OFFLINE_PREFERRED
+ * in manifests.ts), so this is politeness rather than a race, but it costs
+ * nothing. On a stop the backend goes first, because it is the one holding the
+ * volume and the memory.
+ */
+export async function setEnvironmentRunning(
+  store: any, clusterId: string, spec: RemudaSpec, running: boolean
+): Promise<void> {
+  const names = [spec.name, `${ spec.name }-ui`];
+
+  for (const name of running ? [...names].reverse() : names) {
+    await scaleDeployment(store, clusterId, spec.namespace, name, running ? 1 : 0);
+  }
+}
+
+/**
+ * Read-modify-write rather than a scale subresource: Steve exposes neither
+ * `/scale` nor a usable PATCH here, and rejects an update that carries no
+ * resourceVersion -- the same constraint resyncHop() works around.
+ *
+ * A Deployment that cannot be read is skipped rather than treated as a failure.
+ * An incomplete environment is missing one or both of them by definition, and
+ * stopping the half that does exist is still the useful outcome. A failed
+ * *write* is not swallowed, because that is the case where the user is told the
+ * environment stopped and it did not.
+ */
+async function scaleDeployment(
+  store: any, clusterId: string, namespace: string, name: string, replicas: number
+): Promise<void> {
+  const url = resourceUrl(clusterId, ENDPOINTS.deployment, namespace, name);
+  let existing: any;
+
+  try {
+    existing = await store.dispatch('management/request', { url });
+  } catch {
+    return;
+  }
+
+  if (!existing || existing.spec?.replicas === replicas) {
+    return;
+  }
+
+  await store.dispatch('management/request', {
+    url,
+    method: 'PUT',
+    data:   { ...existing, spec: { ...existing.spec, replicas } },
+  });
+}
+
+/**
  * Give the target cluster a default StorageClass backed by local-path.
  *
  * Cluster-wide infrastructure, not part of any environment, so it is created

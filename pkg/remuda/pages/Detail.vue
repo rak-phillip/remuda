@@ -8,14 +8,15 @@ import AsyncButton from '@shell/components/AsyncButton.vue';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import {
-  deleteEnvironment, hopAddresses, list, readEnvironments, rebuildUi, resourceUrl, resyncHop
+  deleteEnvironment, hopAddresses, list, readEnvironments, rebuildUi, resourceUrl, resyncHop,
+  setEnvironmentRunning
 } from '../utils/api';
 import { ingressEntry } from '../utils/discovery';
 import { hopHasDrifted } from '../utils/hop';
-import { isIncomplete } from '../utils/status';
+import { isIncomplete, runStateOf } from '../utils/status';
 import { environmentUrl, resourceBase } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
-import type { IngressEntry, RemudaSpec } from '../types';
+import type { IngressEntry, RemudaSpec, RunState } from '../types';
 
 const store = useStore();
 const route = useRoute();
@@ -30,9 +31,10 @@ const error = ref('');
 const spec = ref<RemudaSpec | null>(null);
 const password = ref('');
 const revealed = ref(false);
-const backendReady = ref(false);
-// Distinct from backendReady: the Deployment existing at all is what says the
-// create got far enough, regardless of whether its pod is up yet.
+const runState = ref<RunState>('pending');
+const backendReady = computed(() => runState.value === 'ready');
+// Distinct from runState: the Deployment existing at all is what says the create
+// got far enough, regardless of whether its pod is up -- or scaled to zero.
 const hasBackend = ref(false);
 const jobs = ref<any[]>([]);
 const confirmDelete = ref<any>(null);
@@ -108,7 +110,7 @@ async function load() {
     const backend = (deployments.data || []).find((d: any) => d.metadata?.name === found.name);
 
     hasBackend.value = !!backend;
-    backendReady.value = (backend?.status?.readyReplicas || 0) > 0;
+    runState.value = runStateOf(backend);
     jobs.value = (allJobs.data || []).filter((j: any) => j.metadata?.labels?.[LABEL_NAME] === found.name);
 
     if (!password.value) {
@@ -189,6 +191,26 @@ async function rebuild(cb: (ok: boolean) => void) {
   }
 }
 
+/**
+ * Scaling both Deployments is the whole of stop and start, and nothing an
+ * environment holds is lost either way, so neither asks for confirmation the way
+ * delete does. Reloading immediately rather than waiting for the poll is what
+ * stops the button offering the action it has just performed.
+ */
+async function setRunning(running: boolean, cb: (ok: boolean) => void) {
+  try {
+    await setEnvironmentRunning(store, clusterId, spec.value as RemudaSpec, running);
+    await load();
+    cb(true);
+  } catch (e: any) {
+    error.value = e?.message || i18n.t(running ? 'remuda.error.startFailed' : 'remuda.error.stopFailed');
+    cb(false);
+  }
+}
+
+const start = (cb: (ok: boolean) => void) => setRunning(true, cb);
+const stop = (cb: (ok: boolean) => void) => setRunning(false, cb);
+
 async function remove(cb: (ok: boolean) => void) {
   try {
     await deleteEnvironment(store, clusterId, spec.value as RemudaSpec);
@@ -226,6 +248,16 @@ onUnmounted(() => clearInterval(timer));
         color="warning"
         :label="i18n.t('remuda.detail.incomplete')"
       />
+      <Banner
+        v-else-if="runState === 'stopped'"
+        color="info"
+        :label="i18n.t('remuda.detail.stopped')"
+      />
+      <Banner
+        v-else-if="runState === 'stopping'"
+        color="info"
+        :label="i18n.t('remuda.detail.stoppingHint')"
+      />
 
       <h3>{{ i18n.t('remuda.detail.access') }}</h3>
       <dl class="remuda-facts">
@@ -257,7 +289,7 @@ onUnmounted(() => clearInterval(timer));
         </dd>
 
         <dt>{{ i18n.t('remuda.list.columns.backend') }}</dt>
-        <dd>{{ backendReady ? i18n.t('remuda.state.ready') : i18n.t('remuda.state.pending') }}</dd>
+        <dd>{{ i18n.t(`remuda.state.${runState}`) }}</dd>
 
         <dt>{{ i18n.t('remuda.list.columns.build') }}</dt>
         <dd>{{ i18n.t(`remuda.state.${buildState}`) }}</dd>
@@ -328,6 +360,30 @@ onUnmounted(() => clearInterval(timer));
           :waiting-label="i18n.t('remuda.detail.rebuilding')"
           :success-label="i18n.t('remuda.detail.rebuild')"
           @click="rebuild"
+        />
+        <AsyncButton
+          v-if="runState === 'ready' || runState === 'pending'"
+          mode="apply"
+          action-color="role-secondary"
+          :action-label="i18n.t('remuda.detail.stop')"
+          :waiting-label="i18n.t('remuda.detail.stopping')"
+          :success-label="i18n.t('remuda.detail.stop')"
+          @click="stop"
+        />
+        <!--
+          A start issued while the old pod is still terminating produces one
+          stuck Pending on a RWO volume that is still attached, so `stopping`
+          offers the button and refuses it rather than hiding it.
+        -->
+        <AsyncButton
+          v-else
+          mode="apply"
+          action-color="role-secondary"
+          :action-label="i18n.t('remuda.detail.start')"
+          :waiting-label="i18n.t('remuda.detail.starting')"
+          :success-label="i18n.t('remuda.detail.start')"
+          :disabled="runState === 'stopping'"
+          @click="start"
         />
         <AsyncButton
           v-if="hop"

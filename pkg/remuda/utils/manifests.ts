@@ -223,6 +223,36 @@ export function backendDeploymentManifest(spec: RemudaSpec): ManifestRequest {
                   name: 'k3s-config', mountPath: K3S_CONFIG_PATH, subPath: 'config.yaml',
                 },
               ],
+              /**
+               * Without this the pod is Ready the instant the process starts,
+               * which is seconds -- while Rancher needs minutes. Measured on a
+               * restart of an existing environment: pod start to /dashboard/
+               * answering 200 was 6m06s, and the Deployment reported
+               * readyReplicas=1 for all of it. Everything reading that field --
+               * this extension's own list and detail pages -- therefore said
+               * "Ready" while the URL returned 502.
+               *
+               * /healthz is served by Rancher itself, unauthenticated, and only
+               * once its HTTP listener is up, so it is exactly the transition
+               * the ingress cares about. Port 80 because that is the plain-HTTP
+               * listener the Service and Ingress already target.
+               *
+               * Readiness only, deliberately -- NO livenessProbe. A restart
+               * takes k3s through an etcd cluster-reset that can sit silent for
+               * minutes, and a liveness probe would kill the pod mid-recovery
+               * and never let it finish.
+               */
+              readinessProbe: {
+                httpGet:             { path: '/healthz', port: 80 },
+                // Nothing useful can answer before this, and probing through it
+                // just fills the events log with failures.
+                initialDelaySeconds: 30,
+                periodSeconds:       10,
+                timeoutSeconds:      5,
+                // Generous: once serving, a blip should not pull the pod out of
+                // the Service and 503 someone mid-session.
+                failureThreshold:    6,
+              },
               resources: {
                 requests: { cpu: '1', memory: '3Gi' },
                 limits:   { cpu: '2', memory: '6Gi' },

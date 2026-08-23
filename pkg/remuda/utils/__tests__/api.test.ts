@@ -1,5 +1,6 @@
 import {
   collectionUrl, deleteEnvironment, hostnameTaken, resourceUrl, resyncHop,
+  setEnvironmentRunning,
 } from '../api';
 import { CONFIG_MAP_NAME, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME } from '../constants';
 import type { IngressEntry, RemudaSpec } from '../../types';
@@ -259,5 +260,91 @@ describe('resyncHop', () => {
       addresses: [], addressType: 'ExternalIP', port: 443
     })).toBe(false);
     expect(store.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe('setEnvironmentRunning', () => {
+  const spec = { name: 'multi-idp', namespace: 'rancher-remuda' } as any;
+
+  /** Answers every GET with a Deployment at `replicas`, and records the PUTs. */
+  function storeWith(replicas: number, missing: string[] = []) {
+    const puts: { url: string; replicas: number }[] = [];
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        if (opts.method === 'PUT') {
+          puts.push({ url: opts.url, replicas: opts.data.spec.replicas });
+
+          return {};
+        }
+
+        if (missing.some((name) => opts.url.endsWith(`/${ name }`))) {
+          throw new Error('not found');
+        }
+
+        return { metadata: { resourceVersion: '42' }, spec: { replicas } };
+      }),
+    };
+
+    return { store, puts };
+  }
+
+  it('scales both Deployments to zero on a stop', async() => {
+    const { store, puts } = storeWith(1);
+
+    await setEnvironmentRunning(store, 'local', spec, false);
+
+    expect(puts.map((p) => p.replicas)).toEqual([0, 0]);
+    expect(puts.map((p) => p.url)).toEqual([
+      '/k8s/clusters/local/v1/apps.deployments/rancher-remuda/multi-idp',
+      '/k8s/clusters/local/v1/apps.deployments/rancher-remuda/multi-idp-ui',
+    ]);
+  });
+
+  it('brings nginx up before the backend on a start', async() => {
+    // The backend fetches ui-dashboard-index server-side as it boots, so the
+    // bundle should already be being served by then.
+    const { store, puts } = storeWith(0);
+
+    await setEnvironmentRunning(store, 'local', spec, true);
+
+    expect(puts.map((p) => p.url)).toEqual([
+      '/k8s/clusters/local/v1/apps.deployments/rancher-remuda/multi-idp-ui',
+      '/k8s/clusters/local/v1/apps.deployments/rancher-remuda/multi-idp',
+    ]);
+    expect(puts.every((p) => p.replicas === 1)).toBe(true);
+  });
+
+  it('writes nothing when the Deployments already hold the wanted scale', async() => {
+    const { store, puts } = storeWith(0);
+
+    await setEnvironmentRunning(store, 'local', spec, false);
+
+    expect(puts).toHaveLength(0);
+  });
+
+  it('scales what exists when a Deployment is missing', async() => {
+    // An incomplete environment is missing one or both by definition, and
+    // stopping the half that is there is still the useful outcome.
+    const { store, puts } = storeWith(1, ['multi-idp-ui']);
+
+    await setEnvironmentRunning(store, 'local', spec, false);
+
+    expect(puts.map((p) => p.url)).toEqual([
+      '/k8s/clusters/local/v1/apps.deployments/rancher-remuda/multi-idp',
+    ]);
+  });
+
+  it('reports a failed write rather than swallowing it', async() => {
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        if (opts.method === 'PUT') {
+          throw new Error('forbidden');
+        }
+
+        return { spec: { replicas: 1 } };
+      }),
+    };
+
+    await expect(setEnvironmentRunning(store, 'local', spec, false)).rejects.toThrow('forbidden');
   });
 });

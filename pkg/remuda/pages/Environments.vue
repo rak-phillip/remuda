@@ -5,11 +5,14 @@ import { useRouter } from 'vue-router';
 import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
 import RcButton from '@components/RcButton/RcButton.vue';
+import AsyncButton from '@shell/components/AsyncButton.vue';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import EmptyState from '../components/EmptyState.vue';
-import { buildStateOf, isIncomplete } from '../utils/status';
-import { deleteEnvironment, list, readEnvironments, readyClusters } from '../utils/api';
+import { buildStateOf, isIncomplete, runStateOf } from '../utils/status';
+import {
+  deleteEnvironment, list, readEnvironments, readyClusters, setEnvironmentRunning
+} from '../utils/api';
 import { environmentUrl } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, PRODUCT_NAME } from '../utils/constants';
 import type { RemudaSummary } from '../types';
@@ -42,12 +45,12 @@ async function loadCluster(cluster: { id: string; name: string }): Promise<Remud
 
     return {
       spec,
-      clusterId:    cluster.id,
-      clusterName:  cluster.name,
-      backendReady: (backend?.status?.readyReplicas || 0) > 0,
-      buildState:   buildStateOf(jobs.data || [], spec.name),
-      incomplete:   isIncomplete(spec, !!backend),
-      url:          environmentUrl(spec),
+      clusterId:   cluster.id,
+      clusterName: cluster.name,
+      runState:    runStateOf(backend),
+      buildState:  buildStateOf(jobs.data || [], spec.name),
+      incomplete:  isIncomplete(spec, !!backend),
+      url:         environmentUrl(spec),
     };
   });
 }
@@ -84,6 +87,22 @@ function confirmRemove(cb: (ok: boolean) => void) {
   remove(row, cb);
 }
 
+/**
+ * Stop and start are offered from the row because that is where someone doing
+ * housekeeping across several environments is already looking. Nothing is lost
+ * either way, so unlike delete neither asks for confirmation.
+ */
+async function setRunning(row: RemudaSummary, running: boolean, cb: (ok: boolean) => void) {
+  try {
+    await setEnvironmentRunning(store, row.clusterId, row.spec, running);
+    await load();
+    cb(true);
+  } catch (e: any) {
+    error.value = e?.message || i18n.t(running ? 'remuda.error.startFailed' : 'remuda.error.stopFailed');
+    cb(false);
+  }
+}
+
 async function remove(row: RemudaSummary, cb: (ok: boolean) => void) {
   try {
     await deleteEnvironment(store, row.clusterId, row.spec);
@@ -106,6 +125,20 @@ const goDetail = (row: RemudaSummary) => router.push({
     cluster: BLANK_CLUSTER, clusterId: row.clusterId, name: row.spec.name
   },
 });
+
+/**
+ * The callback is AsyncButton's, and has to reach setRunning: it is what returns
+ * the button from its spinner to a resting state, so dropping it would leave the
+ * button spinning for the full five-second timeout on every click.
+ */
+const toggleRunning = (row: RemudaSummary, cb: (ok: boolean) => void) => setRunning(
+  row, row.runState === 'stopped', cb
+);
+
+const isRunning = (row: RemudaSummary) => row.runState === 'ready' || row.runState === 'pending';
+
+const stopStartLabel = (row: RemudaSummary) => i18n.t(isRunning(row) ? 'remuda.list.stop' : 'remuda.list.start');
+const stopStartWaitingLabel = (row: RemudaSummary) => i18n.t(isRunning(row) ? 'remuda.list.stopping' : 'remuda.list.starting');
 
 const isEmpty = computed(() => !loading.value && !rows.value.length);
 const hasIncomplete = computed(() => rows.value.some((r) => r.incomplete));
@@ -198,7 +231,7 @@ onUnmounted(() => clearInterval(timer));
               class="remuda-incomplete"
             >{{ i18n.t('remuda.state.incomplete') }}</span>
             <template v-else>
-              {{ row.backendReady ? i18n.t('remuda.state.ready') : i18n.t('remuda.state.pending') }}
+              {{ i18n.t(`remuda.state.${row.runState}`) }}
             </template>
           </td>
           <td>{{ row.incomplete ? '—' : i18n.t(`remuda.state.${row.buildState}`) }}</td>
@@ -212,13 +245,48 @@ onUnmounted(() => clearInterval(timer));
             >{{ row.spec.hostname }}</a>
           </td>
           <td>
-            <RcButton
-              size="small"
-              class="bg-error"
-              @click="askDelete(row)"
-            >
-              {{ i18n.t('remuda.list.delete') }}
-            </RcButton>
+            <!--
+              The flex row is an inner element rather than the cell itself:
+              `display: flex` on a <td> takes it out of the table layout, so it
+              stops sharing the row's height and its border-bottom no longer
+              lines up with the other cells'.
+            -->
+            <div class="remuda-row-actions">
+              <!--
+                AsyncButton rather than RcButton: scaling two Deployments is two
+                sequential round trips, and without the spinner the row looks
+                inert until the next poll repaints it.
+
+                A start issued while the old pod is still terminating leaves the
+                new one Pending on a RWO volume still attached to it, so
+                `stopping` shows the button disabled rather than hiding it.
+              -->
+              <AsyncButton
+                v-if="!row.incomplete"
+                mode="apply"
+                size="sm"
+                action-color="role-secondary"
+                :action-label="stopStartLabel(row)"
+                :waiting-label="stopStartWaitingLabel(row)"
+                :success-label="stopStartLabel(row)"
+                :disabled="row.runState === 'stopping'"
+                @click="(cb) => toggleRunning(row, cb)"
+              />
+              <!--
+                Tertiary rather than a red destructive button: RcButton has no
+                destructive variant, and the `bg-error` utility this used to
+                carry is not one. Its hover rule is `.bg-error.btn:hover`, which
+                RcButton's own scoped `.variant-*` rules outrank -- so the button
+                sat blue at rest and turned red only on hover.
+              -->
+              <RcButton
+                variant="tertiary"
+                size="small"
+                @click="askDelete(row)"
+              >
+                {{ i18n.t('remuda.list.delete') }}
+              </RcButton>
+            </div>
           </td>
         </tr>
       </tbody>
@@ -237,6 +305,12 @@ onUnmounted(() => clearInterval(timer));
   align-items: center;
   display: flex;
   justify-content: space-between;
+}
+
+.remuda-row-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .remuda-incomplete {

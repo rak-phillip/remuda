@@ -15,6 +15,10 @@ remuda:
       and design can review work in progress at a shareable URL.
     createAction: Create
     delete: Delete
+    start: Start
+    starting: Starting
+    stop: Stop
+    stopping: Stopping
     incompleteHint: >-
       An environment below was recorded but never finished being created, so
       nothing is running for it. Delete it and create it again; the name stays
@@ -36,6 +40,8 @@ remuda:
     failed: Failed
     unknown: Unknown
     pending: Pending
+    stopped: Stopped
+    stopping: Stopping
 
   create:
     title: Create Dev Environment
@@ -76,7 +82,20 @@ remuda:
     backendImage: Backend image
     rebuild: Rebuild UI
     rebuilding: Rebuilding
+    start: Start
+    starting: Starting
+    stop: Stop
+    stopping: Stopping
     delete: Delete
+    stopped: >-
+      This environment is stopped. Its volumes, hostname and bootstrap password
+      are kept, so starting it gives back the same instance -- allow a few
+      minutes for the nested cluster to finish coming up again. Its URL returns
+      503 until then.
+    stoppingHint: >-
+      The backend is shutting down. It holds the data volume until its pod is
+      gone, so starting again before then leaves the new pod waiting on the
+      volume.
     incompleteHint: >-
       An environment below was recorded but never finished being created, so
       nothing is running for it. Delete it and create it again; the name stays
@@ -156,3 +175,5 @@ remuda:
       every cluster, because they all come from one wildcard DNS record -- pick a
       different one.
     resyncFailed: Could not re-sync this environment's networking
+    startFailed: Could not start the environment
+    stopFailed: Could not stop the environment

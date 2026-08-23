@@ -100,6 +100,19 @@ describe('backendDeploymentManifest', () => {
   it('uses Recreate so the RWO data volume is released before the new pod starts', () => {
     expect(backendDeploymentManifest(spec).body.spec.strategy).toStrictEqual({ type: 'Recreate' });
   });
+
+  // Measured on a restart: 6m06s from pod start to /dashboard/ answering 200,
+  // with readyReplicas=1 for all of it. Without a probe, "Ready" in the UI means
+  // only that the process launched.
+  it('gates readiness on Rancher actually serving', () => {
+    expect(container.readinessProbe.httpGet).toStrictEqual({ path: '/healthz', port: 80 });
+  });
+
+  // A liveness probe would kill the pod during the etcd cluster-reset a restart
+  // goes through, and it would never finish recovering.
+  it('has no liveness probe', () => {
+    expect(container.livenessProbe).toBeUndefined();
+  });
 });
 
 describe('ingressManifest', () => {

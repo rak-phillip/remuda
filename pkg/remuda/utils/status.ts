@@ -1,5 +1,5 @@
 import { LABEL_NAME, INCOMPLETE_AFTER_MS } from './constants';
-import type { BuildState, RemudaSpec } from '../types';
+import type { BuildState, RemudaSpec, RunState } from '../types';
 
 /** State of an environment's most recent build Job. */
 export function buildStateOf(jobs: any[], name: string): BuildState {
@@ -49,4 +49,34 @@ export function isIncomplete(spec: RemudaSpec, hasBackend: boolean, now: number 
   }
 
   return now - created > INCOMPLETE_AFTER_MS;
+}
+
+/**
+ * Whether an environment's workload is running, from its backend Deployment.
+ *
+ * Desired replicas is the entire record of stopped-ness -- nothing is written to
+ * the environment's ConfigMap for it. That keeps the cluster self-describing: an
+ * environment someone stopped with `kubectl scale` reads as stopped here, an
+ * environment created before this existed needs no migration, and there is no
+ * second copy of the truth to drift from the first.
+ *
+ * `stopping` is worth separating from `stopped` because the backend's pod holds
+ * the RWO data volume until it is gone, and a start issued in that window is
+ * what produces a pod stuck Pending on a volume still attached elsewhere.
+ */
+export function runStateOf(backend: any): RunState {
+  if (!backend) {
+    return 'pending';
+  }
+
+  // Absent only if Steve ever hands back an unnormalised object; the API server
+  // defaults it to 1. Reading that as "stopped" would be the damaging way to be
+  // wrong, so assume running.
+  const desired = backend.spec?.replicas ?? 1;
+
+  if (desired === 0) {
+    return (backend.status?.replicas || 0) > 0 ? 'stopping' : 'stopped';
+  }
+
+  return (backend.status?.readyReplicas || 0) > 0 ? 'ready' : 'pending';
 }
