@@ -1,9 +1,9 @@
 import {
   CONFIG_MAP_NAME, DEFAULT_BACKEND_IMAGE, DEFAULT_NESTED_POD_CIDR, DEFAULT_NESTED_SERVICE_CIDR,
-  REMUDA_NS, ENDPOINTS, HOST_CLUSTER_ID, NESTED_CIDR_CANDIDATES,
+  REMUDA_NS, ENDPOINTS, HOST_CLUSTER_ID, NESTED_CIDR_CANDIDATES, REMUDA_ISSUER_NAME,
 } from './constants';
 import { create, list } from './api';
-import type { ClusterDefaults, IngressEntry } from '../types';
+import type { AcmeIssuer, ClusterDefaults, IngressEntry, IssuerKind } from '../types';
 
 /**
  * The wildcard DNS record is created under the host Rancher's own domain, so
@@ -229,6 +229,64 @@ async function firstClusterIssuer(store: any, clusterId: string): Promise<string
   }
 }
 
+/**
+ * The first ACME Issuer on the cluster, whatever namespace it is in.
+ *
+ * A stock Rancher provisions exactly one: `cattle-system/rancher`, created by
+ * the Rancher Helm chart for the server's own certificate. It is never usable
+ * directly -- `cert-manager.io/issuer` resolves in the *Ingress's* namespace, so
+ * an Issuer in cattle-system is invisible to an Ingress in rancher-remuda -- but
+ * its ACME configuration is exactly what a new Issuer in our own namespace
+ * needs, and it is the only issuer a cluster is guaranteed to have.
+ *
+ * Non-ACME issuers (selfSigned, ca, vault) are skipped: mirroring a selfSigned
+ * issuer would produce the same untrusted certificate traefik already serves by
+ * default, which is worse than no TLS because it looks configured.
+ */
+async function firstAcmeIssuer(store: any, clusterId: string): Promise<AcmeIssuer | undefined> {
+  try {
+    const res = await store.dispatch('management/request', { url: `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.issuer }` });
+    const found = (res?.data || []).find((i: any) => i?.spec?.acme);
+
+    if (!found) {
+      return undefined;
+    }
+
+    return {
+      source: `${ found.metadata?.namespace }/${ found.metadata?.name }`,
+      spec:   found.spec.acme,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * How this cluster can issue certificates, in order of preference.
+ *
+ * A ClusterIssuer wins because it is explicit operator configuration and works
+ * across namespaces as-is. Falling back to mirroring a namespaced ACME Issuer is
+ * what removes the manual prerequisite on a stock cluster -- see
+ * REMUDA_ISSUER_NAME.
+ */
+async function issuerFor(store: any, clusterId: string): Promise<{ clusterIssuer?: string; issuerKind?: IssuerKind; acme?: AcmeIssuer }> {
+  const clusterIssuer = await firstClusterIssuer(store, clusterId);
+
+  if (clusterIssuer) {
+    return { clusterIssuer, issuerKind: 'ClusterIssuer' };
+  }
+
+  const acme = await firstAcmeIssuer(store, clusterId);
+
+  if (!acme) {
+    return {};
+  }
+
+  return {
+    clusterIssuer: REMUDA_ISSUER_NAME, issuerKind: 'Issuer', acme
+  };
+}
+
 /** Persisted defaults win over discovered ones, so an override sticks. */
 async function savedDefaults(store: any, clusterId: string): Promise<Partial<ClusterDefaults>> {
   try {
@@ -355,22 +413,22 @@ export async function ingressEntry(store: any, clusterId: string, ingressClass: 
  * TLS terminates on the host, so these are read there and not on the target --
  * which is why a downstream cluster needs no cert-manager at all.
  */
-export async function hostIngressDefaults(store: any): Promise<{ ingressClass: string; clusterIssuer?: string }> {
-  const [ingressClass, clusterIssuer] = await Promise.all([
+export async function hostIngressDefaults(store: any): Promise<{ ingressClass: string; clusterIssuer?: string; issuerKind?: IssuerKind; acme?: AcmeIssuer }> {
+  const [ingressClass, issuer] = await Promise.all([
     firstIngressClass(store, HOST_CLUSTER_ID),
-    firstClusterIssuer(store, HOST_CLUSTER_ID),
+    issuerFor(store, HOST_CLUSTER_ID),
   ]);
 
-  return { ingressClass, clusterIssuer };
+  return { ingressClass, ...issuer };
 }
 
 export async function discoverDefaults(store: any, clusterId: string): Promise<ClusterDefaults> {
-  const [url, version, ingressClass, storage, clusterIssuer, nested, saved] = await Promise.all([
+  const [url, version, ingressClass, storage, issuer, nested, saved] = await Promise.all([
     serverUrl(store),
     serverVersion(store),
     firstIngressClass(store, clusterId),
     storageClasses(store, clusterId),
-    firstClusterIssuer(store, clusterId),
+    issuerFor(store, clusterId),
     hostCidrs(store, clusterId),
     savedDefaults(store, clusterId),
   ]);
@@ -380,7 +438,7 @@ export async function discoverDefaults(store: any, clusterId: string): Promise<C
     serverVersion:   version,
     ingressClass,
     storageClass:    storage.preferred,
-    clusterIssuer,
+    ...issuer,
     ...nested,
     ...saved,
     // After `saved` on purpose: this describes the cluster as it is right now,

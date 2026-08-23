@@ -94,14 +94,36 @@ actively wrong: the node's resolvers do not resolve `*.svc.cluster.local`, which
 
 ## Prerequisites
 
-These are needed **once, on the management cluster** — the one serving this Rancher. A downstream
-cluster needs neither of them; see [Downstream clusters](#downstream-clusters).
+**Wildcard DNS** for the base domain, pointing at the management cluster's ingress, is the only thing
+needed **once, on the management cluster** — the one serving this Rancher. The base domain is derived
+from the host Rancher's `server-url`, so for a Rancher at `https://example.ui.rancher.space` add
+`*.example.ui.rancher.space`. A downstream cluster needs no DNS record of its own; see
+[Downstream clusters](#downstream-clusters).
 
-1. **Wildcard DNS** for the base domain, pointing at the management cluster's ingress. The base
-   domain is derived from the host Rancher's `server-url`, so for a Rancher at
-   `https://example.ui.rancher.space` add `*.example.ui.rancher.space`.
-2. **A cert-manager `ClusterIssuer`.** A namespaced `Issuer` will not work — environments live in
-   their own namespace.
+### TLS needs no setup
+
+A Rancher installed with Let's Encrypt already has an `Issuer` named `rancher` in `cattle-system`,
+created by its own Helm chart for the server certificate. That Issuer cannot be used directly —
+`cert-manager.io/issuer` resolves in the **Ingress's own namespace**, so an Issuer in `cattle-system`
+is invisible to an Ingress in `rancher-remuda`, and only a `ClusterIssuer` crosses namespaces.
+
+So Remuda copies its ACME configuration into an `Issuer` of its own, `remuda-le`, in the environment's
+namespace. That Issuer is created once per namespace and shared by every environment in it, and it is
+never removed when one environment is deleted. cert-manager registers a fresh ACME account against the
+same email address as the cluster's existing issuer. The create form says when this is happening, and
+names the Issuer it copied.
+
+For a downstream environment the Issuer is created on the **management** cluster, because that is
+where the hop terminates TLS.
+
+> This was not always true. Until `v0.1.5` the extension looked only for a `ClusterIssuer`, found none
+> on a stock Rancher, and created environments with no `tls:` block at all — traefik then served
+> `CN=TRAEFIK DEFAULT CERT` and the browser refused it. Every cluster it had been developed against
+> had a hand-made `ClusterIssuer`, so the out-of-the-box path had never once run.
+
+**A `ClusterIssuer` still wins if you have one.** It is explicit operator configuration and is used
+as-is, with nothing copied. Create one if you want every namespace on the cluster to share a single ACME
+account, or to use an issuer other than the one Rancher configured for itself:
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -115,7 +137,8 @@ spec:
     solvers: [{ http01: { ingress: { class: traefik } } }]
 ```
 
-Without an issuer an environment is still created, but with no TLS.
+With neither a `ClusterIssuer` nor an ACME `Issuer` anywhere on the cluster, an environment is still
+created, but with no TLS — the create form warns before you get there.
 
 > Let's Encrypt limits certificates per **registered domain** (50/week). Where many instances share
 > one domain, churning environments will eat into that shared budget. Use the staging ACME endpoint

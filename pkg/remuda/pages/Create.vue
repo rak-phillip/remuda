@@ -27,7 +27,7 @@ import {
   DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, GITHUB_DEBOUNCE_MS, HOST_CLUSTER_ID, REMUDA_NS,
   PRODUCT_NAME,
 } from '../utils/constants';
-import type { IngressEntry, RemudaSpec } from '../types';
+import type { AcmeIssuer, IngressEntry, IssuerKind, RemudaSpec } from '../types';
 
 const store = useStore();
 const router = useRouter();
@@ -107,6 +107,10 @@ const serverVersion = ref('');
 const ingressClass = ref('');
 const storageClass = ref('');
 const clusterIssuer = ref('');
+// How the issuer above is referenced, and the ACME spec to mirror when nothing
+// cluster-scoped exists. See utils/discovery.ts issuerFor().
+const issuerKind = ref<IssuerKind | undefined>(undefined);
+const acme = ref<AcmeIssuer | undefined>(undefined);
 const hasStorageClass = ref(true);
 const installingStorage = ref(false);
 
@@ -115,6 +119,8 @@ const installingStorage = ref(false);
 const hopEntry = ref<IngressEntry | undefined>(undefined);
 const hostIngressClass = ref('');
 const hostClusterIssuer = ref('');
+const hostIssuerKind = ref<IssuerKind | undefined>(undefined);
+const hostAcme = ref<AcmeIssuer | undefined>(undefined);
 
 // Chosen against the host cluster's own ranges when defaults are discovered.
 const nestedPodCidr = ref(DEFAULT_NESTED_POD_CIDR);
@@ -143,6 +149,17 @@ const storageUnavailable = computed(() => !hasStorageClass.value && !storageClas
  * cert-manager at all.
  */
 const effectiveIssuer = computed(() => (targetsLocal.value ? clusterIssuer.value : hostClusterIssuer.value));
+const effectiveIssuerKind = computed(() => (targetsLocal.value ? issuerKind.value : hostIssuerKind.value));
+const effectiveAcme = computed(() => (targetsLocal.value ? acme.value : hostAcme.value));
+
+/**
+ * Whether TLS will come from an Issuer this extension creates rather than one
+ * the cluster already had.
+ *
+ * Worth saying out loud: it registers an ACME account against the email on the
+ * cluster's existing issuer, which is a side effect nobody asked for explicitly.
+ */
+const mirrorsIssuer = computed(() => effectiveIssuerKind.value === 'Issuer' && !!effectiveAcme.value);
 
 /** A downstream target whose entry point could not be found cannot be fronted. */
 const hopUnavailable = computed(() => !targetsLocal.value && !!clusterId.value && !hopEntry.value);
@@ -215,6 +232,8 @@ async function loadDefaults() {
   ingressClass.value = defaults.ingressClass;
   storageClass.value = defaults.storageClass || '';
   clusterIssuer.value = defaults.clusterIssuer || '';
+  issuerKind.value = defaults.issuerKind;
+  acme.value = defaults.acme;
   hasStorageClass.value = defaults.hasStorageClass !== false;
   nestedPodCidr.value = defaults.nestedPodCidr || DEFAULT_NESTED_POD_CIDR;
   nestedServiceCidr.value = defaults.nestedServiceCidr || DEFAULT_NESTED_SERVICE_CIDR;
@@ -238,6 +257,8 @@ async function loadHopDefaults(targetIngressClass: string) {
   hopEntry.value = undefined;
   hostIngressClass.value = '';
   hostClusterIssuer.value = '';
+  hostIssuerKind.value = undefined;
+  hostAcme.value = undefined;
 
   if (targetsLocal.value || !clusterId.value) {
     return;
@@ -250,6 +271,8 @@ async function loadHopDefaults(targetIngressClass: string) {
 
   hostIngressClass.value = host.ingressClass;
   hostClusterIssuer.value = host.clusterIssuer || '';
+  hostIssuerKind.value = host.issuerKind;
+  hostAcme.value = host.acme;
   hopEntry.value = entry;
 }
 
@@ -387,10 +410,18 @@ function buildSpec(): RemudaSpec {
       port:            hopEntry.value.port,
       ingressClass:    hostIngressClass.value,
       clusterIssuer:   hostClusterIssuer.value || undefined,
+      issuerKind:      hostIssuerKind.value,
+      acme:            hostAcme.value?.spec,
     },
     ingressClass:  ingressClass.value,
     storageClass:  storageClass.value || undefined,
+    // The *target* cluster's issuer, describing the objects written there. The
+    // host's lives on `hop` instead -- mixing them made a downstream create try
+    // to write an Issuer onto a cluster with no cert-manager, which is exactly
+    // the cluster the design says needs none.
     clusterIssuer: clusterIssuer.value || undefined,
+    issuerKind:    issuerKind.value,
+    acme:          acme.value?.spec,
     gitSecretName: gitSecretName.value || undefined,
     dataSizeGb:    Number(dataSizeGb.value),
     uiSizeGb:      Number(uiSizeGb.value),
@@ -517,6 +548,11 @@ onMounted(async() => {
         />
       </div>
     </Banner>
+    <Banner
+      v-if="mirrorsIssuer"
+      color="info"
+      :label="i18n.t('remuda.create.issuerMirrored', { source: effectiveAcme?.source })"
+    />
     <Banner
       v-if="!effectiveIssuer"
       color="warning"

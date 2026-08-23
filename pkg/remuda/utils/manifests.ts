@@ -1,8 +1,9 @@
 import {
   REMUDA_NS, ENDPOINTS, INOTIFY_LIMITS, K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER,
   LABEL_ROLE, ROLE_BACKEND, ROLE_BUILD, ROLE_UI, UI_BUNDLE_PATH, BUILD_IMAGE, SERVE_IMAGE,
+  REMUDA_ISSUER_NAME, REMUDA_ISSUER_ACCOUNT_SECRET,
 } from './constants';
-import type { RemudaSpec, ManifestRequest } from '../types';
+import type { IssuerKind, RemudaSpec, ManifestRequest } from '../types';
 
 export const labelsFor = (spec: RemudaSpec, role?: string): Record<string, string> => ({
   [LABEL_MANAGED]: 'true',
@@ -341,6 +342,64 @@ export const uiServiceManifest = (spec: RemudaSpec) => serviceManifest(spec, `${
   },
 ]);
 
+/**
+ * The cert-manager annotation for whichever issuer kind was discovered.
+ *
+ * `cert-manager.io/cluster-issuer` needs no kind because ClusterIssuer is
+ * cluster-scoped and unambiguous. A namespaced Issuer needs both the name and
+ * `issuer-kind`, and is resolved **in the Ingress's own namespace** -- which is
+ * the whole reason the mirrored Issuer has to exist next to the Ingress rather
+ * than being referenced where the cluster already keeps one.
+ *
+ * Shared with the hop, because for a downstream environment the hop's Ingress is
+ * the one that terminates TLS.
+ */
+export function issuerAnnotations(name?: string, kind?: IssuerKind): Record<string, string> {
+  if (!name) {
+    return {};
+  }
+
+  // Absent kind means ClusterIssuer, so specs recorded before the mirrored path
+  // existed keep producing exactly what they produced before.
+  if (kind === 'Issuer') {
+    return {
+      'cert-manager.io/issuer':      name,
+      'cert-manager.io/issuer-kind': 'Issuer',
+    };
+  }
+
+  return { 'cert-manager.io/cluster-issuer': name };
+}
+
+/**
+ * An Issuer in the environment's own namespace, copied from whatever ACME
+ * configuration the cluster already has.
+ *
+ * Only the account key is changed. Pointing at the source Issuer's
+ * `privateKeySecretRef` would name a Secret in *its* namespace, which does not
+ * exist in ours; cert-manager creates a fresh key here instead and registers a
+ * new ACME account against the same email. Account registration is not
+ * meaningfully rate limited -- certificate issuance is, and that is unchanged.
+ */
+export function issuerManifest(spec: RemudaSpec, acme: Record<string, any>): ManifestRequest {
+  return {
+    endpoint: ENDPOINTS.issuer,
+    body:     {
+      apiVersion: 'cert-manager.io/v1',
+      kind:       'Issuer',
+      // No environment labels: this is shared by every environment in the
+      // namespace, so it must not be swept when one of them is deleted.
+      metadata:   { name: REMUDA_ISSUER_NAME, namespace: spec.namespace },
+      spec:       {
+        acme: {
+          ...acme,
+          privateKeySecretRef: { name: REMUDA_ISSUER_ACCOUNT_SECRET },
+        },
+      },
+    },
+  };
+}
+
 export function ingressManifest(spec: RemudaSpec): ManifestRequest {
   const backend = (name: string) => ({ service: { name, port: { number: 80 } } });
 
@@ -351,7 +410,7 @@ export function ingressManifest(spec: RemudaSpec): ManifestRequest {
       kind:       'Ingress',
       metadata:   {
         ...meta(spec, spec.name),
-        ...(spec.clusterIssuer ? { annotations: { 'cert-manager.io/cluster-issuer': spec.clusterIssuer } } : {}),
+        ...(spec.clusterIssuer ? { annotations: issuerAnnotations(spec.clusterIssuer, spec.issuerKind) } : {}),
       },
       spec: {
         ingressClassName: spec.ingressClass,
@@ -478,6 +537,9 @@ export function allManifests(spec: RemudaSpec, password: string, buildId: string
     uiServiceManifest(spec),
     backendDeploymentManifest(spec),
     uiDeploymentManifest(spec),
+    // Before the Ingress that references it. Only for the mirrored path -- a
+    // ClusterIssuer already exists and is not ours to create.
+    ...(spec.acme ? [issuerManifest(spec, spec.acme)] : []),
     ingressManifest(spec),
     buildJobManifest(spec, buildId),
   ];

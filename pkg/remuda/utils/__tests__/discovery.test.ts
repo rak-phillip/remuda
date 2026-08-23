@@ -1,6 +1,6 @@
 import {
-  backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, discoverDefaults, hostnameFor,
-  ingressEntry, pickNestedCidrs, saveDefaults, widenToSixteen,
+  backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, discoverDefaults, hostIngressDefaults,
+  hostnameFor, ingressEntry, pickNestedCidrs, saveDefaults, widenToSixteen,
 } from '../discovery';
 import { DEFAULT_BACKEND_IMAGE, ENDPOINTS } from '../constants';
 
@@ -233,6 +233,88 @@ describe('discoverDefaults storage detection', () => {
     const out = await discoverDefaults(storeWith('error'), 'c-m-abc');
 
     expect(out.hasStorageClass).toBe(true);
+  });
+});
+
+describe('issuer discovery', () => {
+  /** Answers the two lookups issuerFor() makes, in whatever combination. */
+  function storeWith({ clusterIssuers = [], issuers = [] }: any) {
+    return {
+      dispatch: jest.fn(async(action: string, opts: any) => {
+        if (action === 'management/find') {
+          return { value: '' };
+        }
+
+        if (opts?.url?.includes('clusterissuers')) {
+          return { data: clusterIssuers };
+        }
+
+        if (opts?.url?.includes('cert-manager.io.issuers')) {
+          return { data: issuers };
+        }
+
+        return { data: [] };
+      }),
+    };
+  }
+
+  const rancherIssuer = {
+    metadata: { name: 'rancher', namespace: 'cattle-system' },
+    spec:     { acme: { email: 'admin@example.com', solvers: [{ http01: {} }] } },
+  };
+
+  it('prefers a ClusterIssuer, and mirrors nothing', async() => {
+    // Explicit operator configuration, works across namespaces as-is.
+    const out = await hostIngressDefaults(storeWith({ clusterIssuers: [{ metadata: { name: 'dev-envs-le' } }], issuers: [rancherIssuer] }));
+
+    expect(out.clusterIssuer).toBe('dev-envs-le');
+    expect(out.issuerKind).toBe('ClusterIssuer');
+    expect(out.acme).toBeUndefined();
+  });
+
+  // The stock Rancher case: the chart provisions cattle-system/rancher and
+  // nothing cluster-scoped, which is why TLS silently never worked.
+  it('falls back to mirroring a namespaced ACME Issuer', async() => {
+    const out = await hostIngressDefaults(storeWith({ issuers: [rancherIssuer] }));
+
+    expect(out.clusterIssuer).toBe('remuda-le');
+    expect(out.issuerKind).toBe('Issuer');
+    expect(out.acme?.source).toBe('cattle-system/rancher');
+    expect(out.acme?.spec).toStrictEqual(rancherIssuer.spec.acme);
+  });
+
+  it('ignores a non-ACME Issuer', async() => {
+    // Mirroring a selfSigned issuer would reproduce the untrusted certificate
+    // traefik already serves, while looking configured.
+    const out = await hostIngressDefaults(storeWith({ issuers: [{ metadata: { name: 'selfsigned', namespace: 'default' }, spec: { selfSigned: {} } }] }));
+
+    expect(out.clusterIssuer).toBeUndefined();
+    expect(out.issuerKind).toBeUndefined();
+  });
+
+  it('reports no issuer when the cluster has neither', async() => {
+    const out = await hostIngressDefaults(storeWith({}));
+
+    expect(out.clusterIssuer).toBeUndefined();
+    expect(out.acme).toBeUndefined();
+  });
+
+  it('does not fail the form when the Issuer CRD is absent', async() => {
+    const store = {
+      dispatch: jest.fn(async(action: string, opts: any) => {
+        if (action === 'management/find') {
+          return { value: '' };
+        }
+
+        if (opts?.url?.includes('issuers')) {
+          throw new Error('no such type');
+        }
+
+        return { data: [] };
+      }),
+    };
+
+    await expect(hostIngressDefaults(store)).resolves.toBeDefined();
   });
 });
 

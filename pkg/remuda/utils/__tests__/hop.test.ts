@@ -162,3 +162,88 @@ describe('hopHasDrifted', () => {
     expect(hopHasDrifted(['52.12.200.3'], [])).toBe(false);
   });
 });
+
+describe('hopManifests issuer', () => {
+  const mirrored = (overrides: any = {}) => spec({
+    hop: {
+      ...(spec().hop as any),
+      clusterIssuer: 'remuda-le',
+      issuerKind:    'Issuer',
+      acme:          { email: 'admin@example.com' },
+      ...overrides,
+    },
+  } as any);
+
+  it('writes the Issuer on the host cluster, before the Ingress', () => {
+    // TLS terminates on the hop, so the Issuer belongs beside *this* Ingress --
+    // not on the cluster the workload runs on.
+    const manifests = hopManifests(mirrored());
+    const kinds = manifests.map((m) => m.body.kind);
+
+    expect(kinds).toContain('Issuer');
+    expect(kinds.indexOf('Issuer')).toBeLessThan(kinds.indexOf('Ingress'));
+  });
+
+  it('annotates the hop Ingress with issuer + issuer-kind', () => {
+    const ingress = byKind(hopManifests(mirrored()), 'Ingress');
+
+    expect(ingress.metadata.annotations['cert-manager.io/issuer']).toBe('remuda-le');
+    expect(ingress.metadata.annotations['cert-manager.io/issuer-kind']).toBe('Issuer');
+    expect(ingress.spec.tls[0].hosts).toStrictEqual([spec().hostname]);
+  });
+
+  it('keeps the ClusterIssuer form unchanged', () => {
+    // prak-bf3b08bd has a ClusterIssuer and must keep producing today's output.
+    const ingress = byKind(hopManifests(spec()), 'Ingress');
+
+    expect(ingress.metadata.annotations['cert-manager.io/cluster-issuer']).toBe('dev-envs-le');
+    expect(ingress.metadata.annotations['cert-manager.io/issuer-kind']).toBeUndefined();
+    expect(hopManifests(spec()).map((m) => m.body.kind)).not.toContain('Issuer');
+  });
+
+  it('creates no Issuer when there is no ACME spec to copy', () => {
+    const noIssuer = spec({
+      hop: {
+        ...(spec().hop as any), clusterIssuer: undefined, issuerKind: undefined
+      }
+    } as any);
+    const ingress = byKind(hopManifests(noIssuer), 'Ingress');
+
+    expect(hopManifests(noIssuer).map((m) => m.body.kind)).not.toContain('Issuer');
+    expect(ingress.spec.tls).toBeUndefined();
+  });
+});
+
+describe('the hop and the target never share an issuer', () => {
+  /*
+   * A downstream cluster has no cert-manager -- by design, because TLS
+   * terminates on the host. Writing the host's Issuer into the environment's own
+   * manifests made a downstream create fail outright on a 404 for the Issuer
+   * CRD. The two clusters' issuers therefore live on different objects.
+   */
+  it('reads the ACME spec from the hop, not from the environment', () => {
+    const hostOnly = spec({
+      acme: undefined,
+      hop:  {
+        ...(spec().hop as any),
+        clusterIssuer: 'remuda-le',
+        issuerKind:    'Issuer',
+        acme:          { email: 'admin@example.com' },
+      },
+    } as any);
+
+    expect(hopManifests(hostOnly).map((m) => m.body.kind)).toContain('Issuer');
+  });
+
+  it('ignores an ACME spec that belongs to the target cluster', () => {
+    // spec.acme describes the *target*; the hop must never act on it.
+    const targetOnly = spec({
+      acme: { email: 'target@example.com' },
+      hop:  {
+        ...(spec().hop as any), clusterIssuer: undefined, issuerKind: undefined, acme: undefined,
+      },
+    } as any);
+
+    expect(hopManifests(targetOnly).map((m) => m.body.kind)).not.toContain('Issuer');
+  });
+});

@@ -1,5 +1,6 @@
 import {
   allManifests, backendDeploymentManifest, buildJobManifest, buildScript, clusterDnsFor,
+  issuerAnnotations, issuerManifest,
   dashboardIndexUrl, dataPvcManifest, ingressManifest, inotifyInitContainer, k3sConfigManifest,
   k3sConfigName, labelsFor, resourceBase, uiDeploymentManifest,
 } from '../manifests';
@@ -362,5 +363,95 @@ describe('inotifyInitContainer', () => {
 
     expect(pod.initContainers).toHaveLength(1);
     expect(pod.initContainers[0].name).toBe('raise-inotify-limits');
+  });
+});
+
+describe('issuerAnnotations', () => {
+  it('uses cluster-issuer for a ClusterIssuer, with no kind', () => {
+    // ClusterIssuer is cluster-scoped and unambiguous, so cert-manager needs no
+    // issuer-kind alongside it.
+    expect(issuerAnnotations('dev-envs-le', 'ClusterIssuer')).toStrictEqual({ 'cert-manager.io/cluster-issuer': 'dev-envs-le' });
+  });
+
+  // The no-migration guarantee: specs recorded before the mirrored path existed
+  // carry a name and no kind, and must keep producing exactly what they did.
+  it('treats a missing kind as ClusterIssuer', () => {
+    expect(issuerAnnotations('dev-envs-le')).toStrictEqual({ 'cert-manager.io/cluster-issuer': 'dev-envs-le' });
+  });
+
+  it('uses issuer + issuer-kind for a namespaced Issuer', () => {
+    expect(issuerAnnotations('remuda-le', 'Issuer')).toStrictEqual({
+      'cert-manager.io/issuer':      'remuda-le',
+      'cert-manager.io/issuer-kind': 'Issuer',
+    });
+  });
+
+  it('annotates nothing when the cluster offers no issuer', () => {
+    expect(issuerAnnotations(undefined, 'Issuer')).toStrictEqual({});
+    expect(issuerAnnotations('')).toStrictEqual({});
+  });
+});
+
+describe('issuerManifest', () => {
+  const acme = {
+    email:               'admin@example.com',
+    server:              'https://acme-v02.api.letsencrypt.org/directory',
+    privateKeySecretRef: { name: 'letsencrypt-production' },
+    solvers:             [{ http01: { ingress: { class: 'traefik' } } }],
+  };
+  const body = issuerManifest(spec, acme).body;
+
+  it('creates a namespaced Issuer beside the Ingress', () => {
+    // cert-manager.io/issuer resolves in the Ingress's own namespace, which is
+    // the entire reason this object exists rather than referencing the one the
+    // cluster already has in cattle-system.
+    expect(body.kind).toBe('Issuer');
+    expect(body.metadata.namespace).toBe(spec.namespace);
+  });
+
+  it('copies the ACME config verbatim apart from the account key', () => {
+    expect(body.spec.acme.email).toBe(acme.email);
+    expect(body.spec.acme.server).toBe(acme.server);
+    expect(body.spec.acme.solvers).toStrictEqual(acme.solvers);
+  });
+
+  it('points at its own account key rather than the source namespace secret', () => {
+    // The source Issuer's secret lives in its own namespace and does not exist
+    // in ours; cert-manager creates this one and registers a fresh account.
+    expect(body.spec.acme.privateKeySecretRef).toStrictEqual({ name: 'remuda-le-account' });
+  });
+
+  it('carries no environment labels, so a delete sweep cannot claim it', () => {
+    // Shared by every environment in the namespace, like remuda-config.
+    expect(body.metadata.labels).toBeUndefined();
+  });
+});
+
+describe('allManifests issuer ordering', () => {
+  const endpoints = (s: any) => allManifests(s, 'pw', '1').map((m) => m.endpoint);
+
+  it('writes the Issuer before the Ingress that references it', () => {
+    const mirrored = {
+      ...spec, clusterIssuer: 'remuda-le', issuerKind: 'Issuer', acme: { email: 'a@b.c' },
+    } as any;
+    const order = endpoints(mirrored);
+
+    expect(order.indexOf('cert-manager.io.issuers')).toBeGreaterThan(-1);
+    expect(order.indexOf('cert-manager.io.issuers')).toBeLessThan(order.indexOf('networking.k8s.io.ingresses'));
+  });
+
+  it('creates no Issuer when the cluster already has a ClusterIssuer', () => {
+    // Not ours to create, and creating one would be a cluster-scoped mutation.
+    const withCluster = {
+      ...spec, clusterIssuer: 'dev-envs-le', issuerKind: 'ClusterIssuer'
+    } as any;
+
+    expect(endpoints(withCluster)).not.toContain('cert-manager.io.issuers');
+  });
+
+  it('creates no Issuer when the cluster offers nothing', () => {
+    expect(endpoints({
+      ...spec, clusterIssuer: undefined, acme: undefined
+    } as any)).not.toContain('cert-manager.io.issuers');
   });
 });

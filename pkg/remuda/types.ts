@@ -43,8 +43,33 @@ export interface HopSpec {
   port: number;
   /** Host cluster's ingress class, not the target's. */
   ingressClass: string;
-  /** Host cluster's ClusterIssuer. TLS terminates here, so the target needs none. */
+  /** Host cluster's issuer. TLS terminates here, so the target needs none. */
   clusterIssuer?: string;
+  /** Defaults to ClusterIssuer when absent -- see IssuerKind. */
+  issuerKind?: IssuerKind;
+  /**
+   * The host cluster's ACME spec, when its issuer has to be mirrored.
+   *
+   * Deliberately separate from RemudaSpec.acme, which describes the *target*
+   * cluster. Sharing one field made a downstream create write the host's Issuer
+   * onto the target -- a cluster that has no cert-manager at all, by design.
+   */
+  acme?: Record<string, any>;
+}
+
+/**
+ * Which kind of cert-manager issuer an environment references.
+ *
+ * Absent means `ClusterIssuer`, so specs recorded before the mirrored-Issuer
+ * path existed keep working untouched.
+ */
+export type IssuerKind = 'ClusterIssuer' | 'Issuer';
+
+/** An ACME issuer spec, copied verbatim from whatever the cluster already has. */
+export interface AcmeIssuer {
+  /** Namespace-qualified source, for display only. */
+  source: string;
+  spec: Record<string, any>;
 }
 
 /** Everything needed to render a dev environment's manifests. */
@@ -69,8 +94,18 @@ export interface RemudaSpec {
   ingressClass: string;
   /** Omitted when the cluster has no default StorageClass to fall back on. */
   storageClass?: string;
-  /** Omitted when cert-manager has no usable ClusterIssuer. */
+  /** Omitted when the cluster offers no usable issuer at all. */
   clusterIssuer?: string;
+  /** Defaults to ClusterIssuer when absent -- see IssuerKind. */
+  issuerKind?: IssuerKind;
+  /**
+   * The target cluster's ACME spec, when its issuer has to be mirrored.
+   *
+   * Only ever the cluster this environment's own objects are written to. For a
+   * downstream environment TLS terminates on the host instead, so this stays
+   * undefined and HopSpec.acme carries it.
+   */
+  acme?: Record<string, any>;
   /** Secret holding a `token` key, for cloning a private fork. */
   gitSecretName?: string;
 
@@ -95,6 +130,9 @@ export interface ClusterDefaults {
   ingressClass: string;
   storageClass?: string;
   clusterIssuer?: string;
+  issuerKind?: IssuerKind;
+  /** The ACME spec to mirror, when the only issuer found was a namespaced one. */
+  acme?: AcmeIssuer;
   /** False only when the cluster genuinely has no StorageClass, not when the lookup failed. */
   hasStorageClass?: boolean;
   /** Chosen to not overlap the host cluster's own CIDRs. */

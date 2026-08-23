@@ -70,6 +70,27 @@ export async function readEnvironments(store: any, clusterId: string): Promise<R
     .filter(Boolean);
 }
 
+/**
+ * Create one manifest, treating "already exists" as success.
+ *
+ * For the objects an environment shares with its neighbours rather than owns --
+ * today just the mirrored Issuer, which is one per namespace. The second
+ * environment in a namespace would otherwise abort its whole create on the
+ * Issuer that the first one quite correctly left behind.
+ */
+async function createShared(store: any, clusterId: string, manifest: ManifestRequest): Promise<void> {
+  try {
+    await create(store, clusterId, manifest);
+  } catch (e: any) {
+    if (!/already exists/i.test(e?.message || '')) {
+      throw e;
+    }
+  }
+}
+
+/** Kinds that belong to the namespace rather than to one environment. */
+const SHARED_ENDPOINTS: string[] = [ENDPOINTS.issuer];
+
 export async function createEnvironment(
   store: any, clusterId: string, spec: RemudaSpec, password: string
 ): Promise<void> {
@@ -77,7 +98,11 @@ export async function createEnvironment(
 
   // Sequential: later objects reference earlier ones by name.
   for (const manifest of allManifests(spec, password, `${ Date.now() }`)) {
-    await create(store, clusterId, manifest);
+    if (SHARED_ENDPOINTS.includes(manifest.endpoint)) {
+      await createShared(store, clusterId, manifest);
+    } else {
+      await create(store, clusterId, manifest);
+    }
   }
 
   await createHop(store, spec);
@@ -100,7 +125,11 @@ export async function createHop(store: any, spec: RemudaSpec): Promise<void> {
   await ensureNamespace(store, HOST_CLUSTER_ID, spec.namespace);
 
   for (const manifest of manifests) {
-    await create(store, HOST_CLUSTER_ID, manifest);
+    if (SHARED_ENDPOINTS.includes(manifest.endpoint)) {
+      await createShared(store, HOST_CLUSTER_ID, manifest);
+    } else {
+      await create(store, HOST_CLUSTER_ID, manifest);
+    }
   }
 }
 
@@ -306,7 +335,13 @@ export async function installLocalPathStorage(store: any, clusterId: string): Pr
   }
 }
 
-/** Every kind an environment owns, in reverse dependency order. */
+/**
+ * Every kind an environment owns, in reverse dependency order.
+ *
+ * ENDPOINTS.issuer is deliberately absent. The mirrored Issuer is one per
+ * namespace and shared by every environment in it, exactly like remuda-config,
+ * so deleting one environment must not take it with them.
+ */
 const OWNED_ENDPOINTS = [
   ENDPOINTS.job,
   // Pods are swept explicitly, and must go before the PVCs they mount.

@@ -92,6 +92,11 @@ remuda:
     ingressClass: Ingress class
     storageClass: Storage class
     clusterIssuer: cert-manager ClusterIssuer
+    issuerMirrored: >-
+      This cluster has no ClusterIssuer, so Remuda will create its own
+      cert-manager Issuer in the rancher-remuda namespace, copying the Let's
+      Encrypt settings from {source}. That registers a new ACME account against
+      the same email address. No other setup is needed.
     installStorage: Install local storage
     installingStorage: Installing
     submit: Create

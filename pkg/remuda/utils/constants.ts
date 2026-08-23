@@ -7,6 +7,25 @@ export const REMUDA_NS = 'rancher-remuda';
 /** ConfigMap holding the per-cluster defaults discovered on first create. */
 export const CONFIG_MAP_NAME = 'remuda-config';
 
+/**
+ * The Issuer Remuda creates in its own namespace when the cluster has no
+ * ClusterIssuer.
+ *
+ * One per namespace, shared by every environment in it -- like CONFIG_MAP_NAME,
+ * and like it, never deleted with an individual environment.
+ *
+ * A stock Rancher provisions only `cattle-system/rancher`, a *namespaced* Issuer
+ * for the server's own certificate, and `cert-manager.io/issuer` resolves in the
+ * Ingress's own namespace -- so that Issuer is invisible to an Ingress in
+ * rancher-remuda. Copying its ACME config here is what makes TLS work with no
+ * manual prerequisite. A ClusterIssuer would also work and is deliberately not
+ * created: it is a cluster-scoped mutation, which matters on a shared instance.
+ */
+export const REMUDA_ISSUER_NAME = 'remuda-le';
+
+/** Where the mirrored Issuer keeps its own ACME account key. */
+export const REMUDA_ISSUER_ACCOUNT_SECRET = 'remuda-le-account';
+
 export const LABEL_MANAGED = 'remuda.rancher.io/managed';
 export const LABEL_NAME = 'remuda.rancher.io/name';
 export const LABEL_OWNER = 'remuda.rancher.io/owner';
@@ -176,6 +195,7 @@ export const ENDPOINTS = {
   role:                  'rbac.authorization.k8s.io.roles',
   rolebinding:           'rbac.authorization.k8s.io.rolebindings',
   clusterissuer:         'cert-manager.io.clusterissuers',
+  issuer:                'cert-manager.io.issuers',
   daemonset:             'apps.daemonsets',
   endpointslice:         'discovery.k8s.io.endpointslices',
   serverstransport:      'traefik.io.serverstransports',

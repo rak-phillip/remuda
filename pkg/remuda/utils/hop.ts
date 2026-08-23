@@ -1,5 +1,5 @@
 import { ENDPOINTS, LABEL_ENTRY_PORT, LABEL_TARGET_CLUSTER, ROLE_HOP } from './constants';
-import { labelsFor } from './manifests';
+import { issuerAnnotations, issuerManifest, labelsFor } from './manifests';
 import type { ManifestRequest, RemudaSpec } from '../types';
 
 /** Suffix for every object the hop owns on the host cluster. */
@@ -56,6 +56,13 @@ export function hopManifests(spec: RemudaSpec): ManifestRequest[] {
 
   const traefik = isTraefik(hop.ingressClass);
   const manifests: ManifestRequest[] = [];
+
+  // TLS terminates here, not on the target, so the mirrored Issuer belongs on
+  // the host cluster next to this Ingress -- not on the cluster the workload
+  // runs on. Written before the Ingress that references it.
+  if (hop.acme && hop.issuerKind === 'Issuer') {
+    manifests.push(issuerManifest(spec, hop.acme));
+  }
 
   // traefik needs a ServersTransport to skip verification; nginx does it with an
   // Ingress annotation and no extra object.
@@ -128,7 +135,7 @@ export function hopManifests(spec: RemudaSpec): ManifestRequest[] {
       metadata:   {
         ...meta,
         annotations: {
-          ...(hop.clusterIssuer ? { 'cert-manager.io/cluster-issuer': hop.clusterIssuer } : {}),
+          ...issuerAnnotations(hop.clusterIssuer, hop.issuerKind),
           ...(isNginx(hop.ingressClass) ? { 'nginx.ingress.kubernetes.io/backend-protocol': 'HTTPS' } : {}),
         },
       },
