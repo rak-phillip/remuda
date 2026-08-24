@@ -264,7 +264,17 @@ describe('buildJobManifest', () => {
     const env = Object.fromEntries(container.env.filter((e: any) => e.value).map((e: any) => [e.name, e.value]));
 
     expect(env.NODE_OPTIONS).toBe('--max_old_space_size=4096');
-    expect(container.resources.limits.memory).toBe('8Gi');
+    expect(container.resources.limits.memory).toBe('7Gi');
+  });
+
+  // The CPU limit caps os.availableParallelism() inside the container, which in
+  // turn caps how many minifier isolates webpack opens -- so it sets the memory
+  // peak (~5.3Gi measured at 4 CPU). Raising it without re-benchmarking memory
+  // is what this guards against.
+  it('caps build CPU, since the memory peak is measured against that cap', () => {
+    const container = buildJobManifest(spec, '1').body.spec.template.spec.containers[0];
+
+    expect(container.resources.limits.cpu).toBe('4');
   });
 
   it('omits the git token when the fork is public', () => {

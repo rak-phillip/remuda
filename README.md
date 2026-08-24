@@ -227,8 +227,24 @@ foreground. See `controller/README.md`.
 
 ## Resource cost
 
-A build needs roughly **6-8 GiB of memory** (`node_modules` is ~855 MB and the dashboard build
-already runs with `--max_old_space_size=4096`).
+A build needs roughly **5.5 GiB of memory** at the Job's 4 CPU limit, which is why it requests
+4Gi and is capped at 7Gi.
+
+That memory figure is tied to the CPU limit rather than to the heap ceiling. Node reads the cgroup
+CPU quota for `os.availableParallelism()`, and webpack's minifier opens that many worker isolates,
+so peak memory scales with the CPU cap. Benchmarked against `rancher/dashboard` master on node 24:
+
+| CPU limit | Peak memory | webpack wall time |
+| --------- | ----------- | ----------------- |
+| 2         | 4.3 GiB     | 44s               |
+| 4         | 5.3 GiB     | 27s               |
+| 8         | 6.0 GiB     | 26s               |
+| uncapped  | 7.4 GiB     | 25s               |
+
+So raising `limits.cpu` buys very little wall time above 4 and costs real memory, and removing it
+lets the build fan out to the node's core count. Lowering it to 2 saves ~1 GiB at roughly a 60%
+longer webpack run. The `--max_old_space_size=4096` heap ceiling is close to irrelevant to the peak
+by comparison -- 3072 and 2048 land within ~700 MiB of it -- but the build does OOM at 1024.
 
 Measured on a single 8 CPU / 32 GiB node, cold, with no cache: **4.6 minutes** end to end for the
 build Job, of which webpack was ~2.5 minutes and the rest `yarn install`. A rebuild reusing the cache

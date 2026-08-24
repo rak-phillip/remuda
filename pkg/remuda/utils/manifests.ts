@@ -485,6 +485,9 @@ export function buildJobManifest(spec: RemudaSpec, buildId: string): ManifestReq
   const env: any[] = [
     { name: 'REPO', value: spec.repo },
     { name: 'BRANCH', value: spec.branch },
+    // Belt and braces: dashboard's own build script sets this inline, which
+    // wins over an inherited value. It only takes effect on a fork that has
+    // dropped it -- the build OOMs below a 2Gi heap.
     { name: 'NODE_OPTIONS', value: '--max_old_space_size=4096' },
     { name: 'YARN_CACHE_FOLDER', value: '/cache/yarn' },
   ];
@@ -515,11 +518,19 @@ export function buildJobManifest(spec: RemudaSpec, buildId: string): ManifestReq
                 { name: 'out', mountPath: '/out' },
                 { name: 'cache', mountPath: '/cache' },
               ],
-              // node_modules is ~855MB and the dashboard build already runs with
-              // --max_old_space_size=4096, so it needs headroom above 4Gi.
+              // Benchmarked against rancher/dashboard master on node 24: the
+              // build peaks at ~5.3Gi with this 4 CPU limit and needs ~26s of
+              // webpack. limits.cpu is load-bearing for memory, not just for
+              // throughput -- node reads the cgroup CPU quota for
+              // os.availableParallelism(), and webpack's minifier opens that
+              // many worker isolates, each with its own heap. Peak scales with
+              // it: ~4.3Gi at 2 CPU, ~5.3Gi at 4, ~6.0Gi at 8, and ~7.4Gi
+              // uncapped on a 24-core node. Raising limits.cpu raises the
+              // memory floor with it; dropping the limit entirely lets the
+              // build fan out to the node's core count and OOM.
               resources: {
-                requests: { cpu: '2', memory: '6Gi' },
-                limits:   { cpu: '4', memory: '8Gi' },
+                requests: { cpu: '1', memory: '4Gi' },
+                limits:   { cpu: '4', memory: '7Gi' },
               },
             }],
             volumes: [
