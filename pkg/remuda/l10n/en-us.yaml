@@ -88,7 +88,10 @@ remuda:
     cacheSize: Build cache
     clusterConfig: Cluster configuration
     baseDomain: Base domain
-    baseDomainHint: Requires a wildcard DNS record pointing at this cluster's ingress.
+    baseDomainHint: >-
+      Requires a wildcard DNS record pointing at the ingress that serves this
+      environment. A default derived from that cluster's own address resolves
+      without one.
     ingressClass: Ingress class
     storageClass: Storage class
     clusterIssuer: cert-manager ClusterIssuer
@@ -142,6 +145,15 @@ remuda:
       the foreground. Browsers throttle background tabs, so an environment whose
       node is replaced while nobody is looking stays unreachable until this page
       is opened again.
+    directRoute: Served by
+    directDrifted: >-
+      This environment's cluster now answers on {address}, which is not the
+      address in its hostname. The address is also baked into the UI bundle at
+      build time, so this cannot be repointed -- create the environment again to
+      pick up the new one.
+    directHint: >-
+      The management cluster is not in the path for this environment: its
+      hostname resolves to its own cluster's ingress, which serves it directly.
     buildLogHint: Build logs are on the build job's pod in the target cluster.
     peek: Debug proxy
 
@@ -175,19 +187,54 @@ remuda:
       outside it, so the environment could not be given a working address. It
       needs an ingress controller answering HTTPS on a LoadBalancer, a NodePort or
       a host port.
-    hopClassUnsupported: >-
-      The management cluster's ingress controller ({ingressClass}) cannot be told
-      to reach a backend over HTTPS without verifying its certificate, which is
-      what fronting an environment on another cluster requires. traefik and nginx
-      both can.
+    noIngressClass: >-
+      This cluster has no IngressClass, so the environment's Ingress cannot be
+      created and nothing would ever serve it. Install an ingress controller here,
+      or name a class of your own under Show Advanced.
+    noIngressClassLocal: >-
+      The local cluster has no IngressClass, so nothing here can serve an
+      environment. A Rancher running in Docker cannot usefully be given one
+      either: its k3s starts with traefik and servicelb disabled, and the
+      container publishes only the Rancher server's own ports. Create the
+      environment on a downstream cluster instead.
     hopIsPublic: >-
       This environment will be reached over its cluster's public address
       ({address}). Traffic between the two clusters is encrypted but its
       certificate is not verified, so treat the environment as exposed and do not
       put anything sensitive in it.
+    directExposure: >-
+      {reason} This environment will instead be reached directly on its own
+      cluster's ingress, at {hostname}.
+    directWildcard: >-
+      That name comes from {suffix}, a public DNS service that resolves any
+      address embedded in a name, so nothing has to be registered for it to
+      work. The address is part of the hostname and is baked into the UI bundle
+      when it is built, so replacing the cluster's node ({address}) means
+      recreating the environment. Set a base domain of your own below to use a
+      name you control instead.
+    directIsPublic: >-
+      This environment answers on its cluster's public address ({address}), so it
+      is reachable from the internet by anyone who knows the name. Treat it as
+      exposed and do not put anything sensitive in it.
     noBaseDomain: >-
       No base domain could be derived. Set one below, and make sure a wildcard DNS
       record points at this cluster's ingress.
+    baseDomainIsIp: >-
+      {baseDomain} is an address, not a domain, so the environment's hostname
+      resolves nowhere and no DNS record can change that. Set a base domain that
+      can carry a subdomain.
+
+  reason:
+    noHostIngress: >-
+      The management cluster has no ingress controller, so it cannot front an
+      environment running on another cluster.
+    hostClassUnsupported: >-
+      The management cluster's ingress controller cannot be told to reach a
+      backend over HTTPS without verifying its certificate, which is what
+      fronting an environment on another cluster requires.
+    baseDomainIsIp: >-
+      This Rancher is reached by address rather than by name, so there is no
+      domain to give an environment a hostname under.
 
   error:
     createFailed: Could not create the environment

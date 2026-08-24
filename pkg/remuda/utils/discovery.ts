@@ -1,9 +1,13 @@
 import {
   CONFIG_MAP_NAME, DEFAULT_BACKEND_IMAGE, DEFAULT_NESTED_POD_CIDR, DEFAULT_NESTED_SERVICE_CIDR,
   REMUDA_NS, ENDPOINTS, HOST_CLUSTER_ID, NESTED_CIDR_CANDIDATES, REMUDA_ISSUER_NAME,
+  WILDCARD_DNS_SUFFIX,
 } from './constants';
 import { create, list } from './api';
-import type { AcmeIssuer, ClusterDefaults, IngressEntry, IssuerKind } from '../types';
+import { hopSupported } from './hop';
+import type {
+  AcmeIssuer, ClusterDefaults, DirectReason, Exposure, IngressEntry, IssuerKind,
+} from '../types';
 
 /**
  * The wildcard DNS record is created under the host Rancher's own domain, so
@@ -15,6 +19,79 @@ export function baseDomainFromServerUrl(serverUrl: string): string {
 
 /** Derive a hostname for an environment. Kept pure so it can be unit tested. */
 export const hostnameFor = (name: string, baseDomain: string): string => `${ name }.${ baseDomain }`;
+
+/**
+ * Whether a base domain is a bare IPv4 address rather than a name.
+ *
+ * A Rancher installed with no DNS record answers on its address, so server-url
+ * is an IP and baseDomainFromServerUrl hands back `13.53.41.140`. Nothing can be
+ * hung under that: `name.13.53.41.140` is not a hostname and no record can make
+ * it one, so an environment named off it is unreachable however well everything
+ * else is wired. That is a different condition from having no base domain at
+ * all, and it is the one that decides an environment cannot go through the host
+ * cluster.
+ */
+export function isIpLiteral(domain: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(domain || '') &&
+    (domain || '').split('.').every((octet) => Number(octet) <= 255);
+}
+
+/**
+ * A wildcard base domain for an address that has no DNS of its own.
+ *
+ * Empty for anything that is not an IPv4 address -- a LoadBalancer that gives
+ * out a hostname (an ELB, say) already *has* a name, and wrapping it in
+ * sslip.io would produce something that resolves to nothing. The caller then
+ * has no base domain to offer and the form asks for one, which is the honest
+ * outcome.
+ */
+export function wildcardDomainFor(address: string): string {
+  return isIpLiteral(address) ? `${ address }.${ WILDCARD_DNS_SUFFIX }` : '';
+}
+
+/**
+ * How an environment on this target will actually be reached.
+ *
+ * Three cases, and the third is why this exists:
+ *
+ * - `local`: the environment's own Ingress is already on the cluster the base
+ *   domain resolves to. Nothing to arrange.
+ * - `hop`: the normal downstream case. The host cluster fronts the environment,
+ *   which needs an ingress controller there that can be pointed upstream over
+ *   HTTPS, and a base domain that can carry a subdomain.
+ * - `direct`: the fallback. The host cluster cannot front anything -- most often
+ *   a Rancher running in docker, whose k3s starts with traefik and servicelb
+ *   disabled and so has no IngressClass at all -- so the hop is skipped and the
+ *   environment is named off the *target* cluster's own ingress address
+ *   instead. The Ingress written next to the workload then serves it directly,
+ *   exactly as it does for `local`.
+ *
+ * `reason` is carried out so the form can say which of the three conditions put
+ * it in the fallback, rather than announcing an unexplained change of address.
+ */
+export function exposureFor(input: {
+  targetsLocal: boolean;
+  hostIngressClass: string;
+  hostBaseDomain: string;
+}): { mode: Exposure; reason?: DirectReason } {
+  if (input.targetsLocal) {
+    return { mode: 'local' };
+  }
+
+  if (!input.hostIngressClass) {
+    return { mode: 'direct', reason: 'noHostIngress' };
+  }
+
+  if (!hopSupported(input.hostIngressClass)) {
+    return { mode: 'direct', reason: 'hostClassUnsupported' };
+  }
+
+  if (isIpLiteral(input.hostBaseDomain)) {
+    return { mode: 'direct', reason: 'baseDomainIsIp' };
+  }
+
+  return { mode: 'hop' };
+}
 
 /** Minor version as a sortable number, e.g. 'v2.16-abc-head' -> 2.16. */
 function minorOf(version: string): number | undefined {
@@ -408,18 +485,28 @@ export async function ingressEntry(store: any, clusterId: string, ingressClass: 
 }
 
 /**
- * The *host* cluster's ingress class and issuer, for the hop's own Ingress.
+ * The *host* cluster's ingress class, domain and issuer, for the hop's own
+ * Ingress.
  *
- * TLS terminates on the host, so these are read there and not on the target --
- * which is why a downstream cluster needs no cert-manager at all.
+ * TLS terminates on the host, so the issuer is read there and not on the target
+ * -- which is why a downstream cluster needs no cert-manager at all.
+ *
+ * The domain is the host Rancher's own, straight from server-url and never the
+ * target cluster's saved override, because what it is used for is deciding
+ * whether the host can front an environment at all. See exposureFor().
  */
-export async function hostIngressDefaults(store: any): Promise<{ ingressClass: string; clusterIssuer?: string; issuerKind?: IssuerKind; acme?: AcmeIssuer }> {
-  const [ingressClass, issuer] = await Promise.all([
+export async function hostIngressDefaults(store: any): Promise<{ ingressClass: string; baseDomain: string; clusterIssuer?: string; issuerKind?: IssuerKind; acme?: AcmeIssuer }> {
+  const [ingressClass, url, issuer] = await Promise.all([
     firstIngressClass(store, HOST_CLUSTER_ID),
+    serverUrl(store),
     issuerFor(store, HOST_CLUSTER_ID),
   ]);
 
-  return { ingressClass, ...issuer };
+  return {
+    ingressClass,
+    baseDomain: baseDomainFromServerUrl(url),
+    ...issuer,
+  };
 }
 
 export async function discoverDefaults(store: any, clusterId: string): Promise<ClusterDefaults> {

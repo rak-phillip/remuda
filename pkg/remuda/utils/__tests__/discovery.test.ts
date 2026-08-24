@@ -1,6 +1,7 @@
 import {
-  backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, discoverDefaults, hostIngressDefaults,
-  hostnameFor, ingressEntry, pickNestedCidrs, saveDefaults, widenToSixteen,
+  backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, discoverDefaults, exposureFor,
+  hostIngressDefaults, hostnameFor, ingressEntry, isIpLiteral, pickNestedCidrs, saveDefaults,
+  widenToSixteen, wildcardDomainFor,
 } from '../discovery';
 import { DEFAULT_BACKEND_IMAGE, ENDPOINTS } from '../constants';
 
@@ -23,6 +24,76 @@ describe('hostnameFor', () => {
   it('composes the environment host under the wildcard domain', () => {
     expect(hostnameFor('multi-idp', 'prak-bf3b08bd.ui.rancher.space'))
       .toBe('multi-idp.prak-bf3b08bd.ui.rancher.space');
+  });
+});
+
+describe('isIpLiteral', () => {
+  it.each([
+    ['13.53.41.140', true],
+    ['44.247.97.31', true],
+    // Not an address, so nothing stops a subdomain being hung under it.
+    ['prak-bf3b08bd.ui.rancher.space', false],
+    ['13.53.41.140.sslip.io', false],
+    // Reads like one but cannot be: an octet past 255 is somebody's hostname.
+    ['999.1.1.1', false],
+    ['', false],
+  ])('%s -> %s', (input, expected) => {
+    expect(isIpLiteral(input)).toBe(expected);
+  });
+
+  it('tolerates the domain being absent', () => {
+    expect(isIpLiteral(undefined as any)).toBe(false);
+  });
+});
+
+describe('wildcardDomainFor', () => {
+  it('wraps an address in the wildcard suffix', () => {
+    expect(wildcardDomainFor('44.247.97.31')).toBe('44.247.97.31.sslip.io');
+    expect(hostnameFor('multi-idp', wildcardDomainFor('44.247.97.31')))
+      .toBe('multi-idp.44.247.97.31.sslip.io');
+  });
+
+  // A LoadBalancer that hands out an ELB hostname already has a name; wrapping
+  // it would resolve to nothing at all.
+  it('gives nothing back for an address that is already a name', () => {
+    expect(wildcardDomainFor('a1b2.eu-north-1.elb.amazonaws.com')).toBe('');
+    expect(wildcardDomainFor('')).toBe('');
+  });
+});
+
+describe('exposureFor', () => {
+  const host = {
+    targetsLocal: false, hostIngressClass: 'traefik', hostBaseDomain: 'prak.ui.rancher.space'
+  };
+
+  it('leaves a local target alone, whatever the host looks like', () => {
+    expect(exposureFor({ ...host, targetsLocal: true }).mode).toBe('local');
+    expect(exposureFor({
+      targetsLocal: true, hostIngressClass: '', hostBaseDomain: '13.53.41.140'
+    }).mode).toBe('local');
+  });
+
+  it('fronts a downstream target from the host when it can', () => {
+    expect(exposureFor(host)).toStrictEqual({ mode: 'hop' });
+    expect(exposureFor({ ...host, hostIngressClass: 'nginx' })).toStrictEqual({ mode: 'hop' });
+  });
+
+  // The docker Rancher case: its k3s starts with traefik disabled, so the host
+  // has no IngressClass and an empty class used to slip the guard and be written
+  // into the hop's Ingress, which the API rejects.
+  it('falls back to direct when the host has no ingress controller', () => {
+    expect(exposureFor({ ...host, hostIngressClass: '' }))
+      .toStrictEqual({ mode: 'direct', reason: 'noHostIngress' });
+  });
+
+  it('falls back to direct when the host ingress cannot go upstream over HTTPS', () => {
+    expect(exposureFor({ ...host, hostIngressClass: 'haproxy' }))
+      .toStrictEqual({ mode: 'direct', reason: 'hostClassUnsupported' });
+  });
+
+  it('falls back to direct when the host has no domain to hang a name under', () => {
+    expect(exposureFor({ ...host, hostBaseDomain: '13.53.41.140' }))
+      .toStrictEqual({ mode: 'direct', reason: 'baseDomainIsIp' });
   });
 });
 
@@ -262,6 +333,27 @@ describe('issuer discovery', () => {
     metadata: { name: 'rancher', namespace: 'cattle-system' },
     spec:     { acme: { email: 'admin@example.com', solvers: [{ http01: {} }] } },
   };
+
+  // Read from server-url on the host and never from the target cluster's saved
+  // override, because what it answers is whether the host can front anything.
+  it('reports the host Rancher own domain alongside the issuer', async() => {
+    const store = {
+      dispatch: jest.fn(async(action: string, opts: any) => {
+        if (action === 'management/find') {
+          return { value: 'https://13.53.41.140/' };
+        }
+
+        return opts?.url?.includes('ingressclasses') ? { data: [] } : { data: [] };
+      }),
+    };
+    const out = await hostIngressDefaults(store);
+
+    expect(out.baseDomain).toBe('13.53.41.140');
+    expect(out.ingressClass).toBe('');
+    expect(exposureFor({
+      targetsLocal: false, hostIngressClass: out.ingressClass, hostBaseDomain: out.baseDomain
+    })).toStrictEqual({ mode: 'direct', reason: 'noHostIngress' });
+  });
 
   it('prefers a ClusterIssuer, and mirrors nothing', async() => {
     // Explicit operator configuration, works across namespaces as-is.

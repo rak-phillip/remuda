@@ -184,6 +184,26 @@ describe('hostnameTaken', () => {
     expect(await hostnameTaken(asking([{ spec: { rules: [{ host: 'other.example.com' }] } }]), 'multi-idp.example.com')).toBe(false);
   });
 
+  // A directly-exposed environment writes nothing to the host cluster, so its
+  // hostname is only claimed on the cluster it runs on -- and that is where two
+  // of them collide.
+  it('also asks the target cluster, where a direct hostname is claimed', async() => {
+    const onTarget = [{ spec: { rules: [{ host: 'multi-idp.44.247.97.31.sslip.io' }] } }];
+    const onlyTargetHas = (opts: any) => (opts?.url?.includes('/clusters/c-m-abc123/') ? onTarget : []);
+    const store = { dispatch: jest.fn(async(_action: string, opts: any) => ({ data: onlyTargetHas(opts) })) };
+
+    expect(await hostnameTaken(store, 'multi-idp.44.247.97.31.sslip.io', 'c-m-abc123')).toBe(true);
+    expect(store.dispatch.mock.calls.map((c: any[]) => c[1].url).join(' ')).toContain(`/clusters/${ HOST_CLUSTER_ID }/`);
+  });
+
+  it('asks the host cluster only once when that is the target', async() => {
+    const store = asking([]);
+
+    await hostnameTaken(store, 'multi-idp.example.com', HOST_CLUSTER_ID);
+
+    expect(store.dispatch).toHaveBeenCalledTimes(1);
+  });
+
   it('does not block a create when the lookup fails', async() => {
     // A courtesy check. Someone without permission to list Ingresses on the host
     // cluster should still be able to create an environment.

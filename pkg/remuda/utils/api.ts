@@ -208,32 +208,42 @@ export async function hopAddresses(store: any, spec: RemudaSpec): Promise<string
 }
 
 /**
- * Whether some environment already claims this hostname on the host cluster.
+ * Whether some environment already claims this hostname.
  *
- * Every hostname comes off one wildcard, so they are unique across all target
- * clusters at once -- two environments of the same name on different clusters
- * would produce two Ingresses for the same host, and only one of them would
- * ever be matched. The host cluster is the right place to ask, because that is
- * where both a `local` environment's own Ingress and a downstream environment's
- * hop Ingress end up.
+ * Two clusters are asked, because a hostname can land on either. The host
+ * cluster carries a `local` environment's own Ingress and a downstream one's
+ * hop Ingress, and while those all come off a single wildcard they are unique
+ * across every target cluster at once -- two environments of the same name
+ * would produce two Ingresses for one host, and only one would ever match.
+ *
+ * A directly-exposed environment writes nothing to the host cluster at all, so
+ * its hostname is only visible on the cluster it runs on. That is where a
+ * collision between two of them happens, and asking only the host would report
+ * a name free that the create is about to fail on.
  *
  * A failed lookup reports "not taken": this is a courtesy check, and it should
  * not block a create on a permission the user may simply not have.
  */
-export async function hostnameTaken(store: any, hostname: string): Promise<boolean> {
+export async function hostnameTaken(store: any, hostname: string, clusterId?: string): Promise<boolean> {
   if (!hostname) {
     return false;
   }
 
-  try {
-    const res = await list(store, HOST_CLUSTER_ID, ENDPOINTS.ingress);
+  const clusters = [HOST_CLUSTER_ID, ...(clusterId && clusterId !== HOST_CLUSTER_ID ? [clusterId] : [])];
 
-    return (res?.data || []).some(
-      (ing: any) => (ing?.spec?.rules || []).some((r: any) => r?.host === hostname)
-    );
-  } catch {
-    return false;
-  }
+  const claimed = await Promise.all(clusters.map(async(id) => {
+    try {
+      const res = await list(store, id, ENDPOINTS.ingress);
+
+      return (res?.data || []).some(
+        (ing: any) => (ing?.spec?.rules || []).some((r: any) => r?.host === hostname)
+      );
+    } catch {
+      return false;
+    }
+  }));
+
+  return claimed.some(Boolean);
 }
 
 /**

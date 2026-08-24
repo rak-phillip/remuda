@@ -6,14 +6,27 @@ export interface IngressEntry {
 }
 
 /**
+ * Where an environment's hostname resolves to, which decides what has to be
+ * built for it. See exposureFor().
+ */
+export type Exposure = 'local' | 'hop' | 'direct';
+
+/** Why the host cluster could not front an environment. One per condition. */
+export type DirectReason = 'noHostIngress' | 'hostClassUnsupported' | 'baseDomainIsIp';
+
+/**
  * How an environment on a downstream cluster is reached.
  *
- * The hostname always comes off the host Rancher's own wildcard (see
+ * The hostname comes off the host Rancher's own wildcard (see
  * baseDomainFromServerUrl), so it only ever resolves to the host cluster's
  * ingress. For a downstream target that means the Ingress created next to the
  * workload is correct and simply never receives traffic; the host cluster has
- * to front it. Set only for downstream targets -- on `local` the environment's
- * own Ingress is already on the right cluster.
+ * to front it.
+ *
+ * Absent on a downstream environment means `direct` exposure, not that the hop
+ * was forgotten: the host cluster could not front it, so the environment is
+ * named off the target cluster's own ingress instead and its own Ingress does
+ * the serving. Also absent on `local`, where that was always true.
  */
 export interface HopSpec {
   /** Cluster the wildcard resolves to, i.e. HOST_CLUSTER_ID. */
@@ -82,6 +95,17 @@ export interface RemudaSpec {
   backendImage: string;
   /** Fully qualified host, e.g. my-feature.rancher.example.com */
   hostname: string;
+  /**
+   * Port to reach `hostname` on, when it is not 443.
+   *
+   * Only ever set for `direct` exposure, and only when the target cluster's
+   * ingress controller answers on a NodePort rather than 443 -- there is no
+   * fronting layer to normalise the port, so the browser has to be told. It
+   * stays out of the Ingress `host` field, which must be a bare name: traefik
+   * and nginx both match Host ignoring the port, which is what makes a
+   * `:31443` URL reach a rule written for the name alone.
+   */
+  entryPort?: number;
   owner: string;
   createdAt: string;
 

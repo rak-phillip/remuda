@@ -30,8 +30,11 @@ const byKind = (manifests: any[], kind: string) => manifests.find((m) => m.body.
 describe('hopManifests', () => {
   it('produces nothing for an environment with no hop', () => {
     // A `local` target is already on the cluster the wildcard resolves to, so a
-    // second Ingress for the same host would only collide with its own.
+    // second Ingress for the same host would only collide with its own. A
+    // downstream environment reached directly is the same story from the other
+    // end: its hostname resolves to its own cluster, so the host fronts nothing.
     expect(hopManifests(spec({ hop: undefined }))).toEqual([]);
+    expect(hopManifests(spec({ hop: undefined, hostname: 'multi-idp.44.247.97.31.sslip.io' }))).toEqual([]);
   });
 
   it('gives the Service no selector, because its backend is another cluster', () => {

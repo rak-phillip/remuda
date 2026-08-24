@@ -15,7 +15,9 @@ import { ingressEntry } from '../utils/discovery';
 import { hopHasDrifted } from '../utils/hop';
 import { isIncomplete, runStateOf } from '../utils/status';
 import { environmentUrl, resourceBase } from '../utils/manifests';
-import { BLANK_CLUSTER, ENDPOINTS, LABEL_NAME, PRODUCT_NAME } from '../utils/constants';
+import {
+  BLANK_CLUSTER, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME, PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
+} from '../utils/constants';
 import type { IngressEntry, RemudaSpec, RunState } from '../types';
 
 const store = useStore();
@@ -77,6 +79,31 @@ const hop = computed(() => spec.value?.hop);
 const hopDrifted = computed(() => hopHasDrifted(activeAddresses.value, liveEntry.value?.addresses || []));
 const hopIsPublic = computed(() => hop.value?.addressType === 'ExternalIP');
 
+/**
+ * A downstream environment with no hop is reached directly on its own cluster's
+ * ingress -- see exposureFor(). Read off the spec rather than recorded on it,
+ * so environments created before the mode existed classify correctly too.
+ */
+const usesDirect = computed(() => !!spec.value && spec.value.clusterId !== HOST_CLUSTER_ID && !spec.value.hop);
+const directAddresses = computed(() => liveEntry.value?.addresses?.join(', ') || '');
+const directIsPublic = computed(() => usesDirect.value && liveEntry.value?.addressType === 'ExternalIP');
+
+/**
+ * A direct environment whose cluster has moved out from under its hostname.
+ *
+ * Only detectable for a wildcard-derived name, where the address is *in* the
+ * hostname -- and only reportable, not repairable: the address is also baked
+ * into the UI bundle's asset URLs at build time, so the way back is to recreate
+ * the environment. The hop exists precisely because it can be repointed instead.
+ */
+const directDrifted = computed(() => {
+  const hostname = spec.value?.hostname || '';
+  const live = liveEntry.value?.addresses || [];
+
+  return usesDirect.value && hostname.endsWith(WILDCARD_DNS_SUFFIX) &&
+    live.length > 0 && !live.some((address) => hostname.includes(address));
+});
+
 const peekUrl = computed(() => (spec.value ? `/k8s/clusters/${ clusterId }/api/v1/namespaces/${ spec.value.namespace }/services/http:${ spec.value.name }:80/proxy/` : ''));
 
 async function loadPassword(env: RemudaSpec) {
@@ -137,7 +164,14 @@ async function load() {
  * controller is worth building later.
  */
 async function refreshHop(env: RemudaSpec) {
+  // A direct environment has no hop to repair, but its cluster's entry point is
+  // still worth reading: it is what the page compares the hostname against to
+  // notice the one kind of drift this mode cannot recover from.
   if (!env.hop) {
+    if (env.clusterId !== HOST_CLUSTER_ID) {
+      liveEntry.value = await ingressEntry(store, env.clusterId, env.ingressClass);
+    }
+
     return;
   }
 
@@ -340,6 +374,30 @@ onUnmounted(() => clearInterval(timer));
         </dl>
         <p class="text-muted">
           {{ i18n.t('remuda.detail.hopSelfHealHint') }}
+        </p>
+      </template>
+
+      <template v-else-if="usesDirect">
+        <h3>{{ i18n.t('remuda.detail.networking') }}</h3>
+        <Banner
+          v-if="directDrifted"
+          color="error"
+          :label="i18n.t('remuda.detail.directDrifted', { address: directAddresses })"
+        />
+        <Banner
+          v-else-if="directIsPublic"
+          color="info"
+          :label="i18n.t('remuda.warning.directIsPublic', { address: directAddresses })"
+        />
+        <dl class="remuda-facts">
+          <dt>{{ i18n.t('remuda.detail.directRoute') }}</dt>
+          <dd><code>{{ spec.clusterId }} &rarr; {{ directAddresses || spec.hostname }}:{{ spec.entryPort || 443 }}</code></dd>
+
+          <dt>{{ i18n.t('remuda.detail.hopAddressType') }}</dt>
+          <dd><code>{{ liveEntry?.addressType || '&mdash;' }}</code></dd>
+        </dl>
+        <p class="text-muted">
+          {{ i18n.t('remuda.detail.directHint') }}
         </p>
       </template>
 

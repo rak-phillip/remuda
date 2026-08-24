@@ -12,8 +12,17 @@ export const labelsFor = (spec: RemudaSpec, role?: string): Record<string, strin
   ...(role ? { [LABEL_ROLE]: role } : {}),
 });
 
+/**
+ * Browser-facing authority, carrying the entry port when there is one.
+ *
+ * Shared by both browser-facing URLs below so they cannot disagree: they are
+ * the same origin by design -- that is what keeps the bundle free of CORS -- and
+ * a port on one but not the other would break exactly that.
+ */
+const browserOrigin = (spec: RemudaSpec): string => `https://${ spec.hostname }${ spec.entryPort ? `:${ spec.entryPort }` : '' }`;
+
 /** Browser-facing. Baked into the bundle's asset URLs at build time. */
-export const resourceBase = (spec: RemudaSpec): string => `https://${ spec.hostname }/${ UI_BUNDLE_PATH }`;
+export const resourceBase = (spec: RemudaSpec): string => `${ browserOrigin(spec) }/${ UI_BUNDLE_PATH }`;
 
 /**
  * Pod-facing. Rancher fetches ui-dashboard-index server-side, so this stays
@@ -21,7 +30,7 @@ export const resourceBase = (spec: RemudaSpec): string => `https://${ spec.hostn
  */
 export const dashboardIndexUrl = (spec: RemudaSpec): string => `http://${ spec.name }-ui.${ spec.namespace }.svc.cluster.local/${ UI_BUNDLE_PATH }/index.html`;
 
-export const environmentUrl = (spec: RemudaSpec): string => `https://${ spec.hostname }`;
+export const environmentUrl = (spec: RemudaSpec): string => browserOrigin(spec);
 
 const meta = (spec: RemudaSpec, name: string, role?: string) => ({
   name,

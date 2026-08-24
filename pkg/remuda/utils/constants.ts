@@ -55,6 +55,23 @@ export const ROLE_HOP = 'hop';
 export const HOST_CLUSTER_ID = 'local';
 
 /**
+ * Wildcard DNS for a Rancher that has none of its own.
+ *
+ * A Rancher reached by IP -- the docker deployments the team shares, where
+ * server-url is `https://13.53.41.140/` and nothing was ever registered in DNS
+ * -- has no domain to hang an environment under: `name.13.53.41.140` is not a
+ * name and cannot be made into one. sslip.io answers any query with the IP
+ * embedded in it, so `name.44.247.97.31.sslip.io` resolves to 44.247.97.31 with
+ * nothing to create and nothing to maintain.
+ *
+ * Only ever a fallback, and only ever a *default*: it puts the environment's
+ * address in a third party's zone, so the Base domain field stays editable and
+ * a team that would rather self-host sslip.io or use a domain of their own can
+ * say so there. See exposureFor().
+ */
+export const WILDCARD_DNS_SUFFIX = 'sslip.io';
+
+/**
  * Path the built dashboard bundle is served under. The bundle is built into a
  * directory of this name so nginx resolves it with no rewrite rule, and it is
  * baked into the bundle's asset URLs via RESOURCE_BASE.

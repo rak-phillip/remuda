@@ -15,9 +15,9 @@ import type { RuleSet } from '@shell/composables/useFormValidation';
 import { useText } from '../utils/i18n';
 import { createEnvironment, hostnameTaken, installLocalPathStorage, readyClusters } from '../utils/api';
 import {
-  backendImageForBranch, discoverDefaults, hostIngressDefaults, hostnameFor, ingressEntry, saveDefaults,
+  backendImageForBranch, discoverDefaults, exposureFor, hostIngressDefaults, hostnameFor, ingressEntry,
+  isIpLiteral, saveDefaults, wildcardDomainFor,
 } from '../utils/discovery';
-import { hopSupported } from '../utils/hop';
 import { isCloneableRepo } from '../utils/validate';
 import { createBranchField } from '../utils/branch-field';
 import { checkRepo, listBranches, parseGitHubRepo, searchBranches } from '../utils/github';
@@ -25,7 +25,7 @@ import type { RepoCheck } from '../utils/github';
 import {
   BLANK_CLUSTER, DEFAULT_CACHE_SIZE_GB, DEFAULT_DATA_SIZE_GB, DEFAULT_NESTED_POD_CIDR,
   DEFAULT_NESTED_SERVICE_CIDR, DEFAULT_UI_SIZE_GB, GITHUB_DEBOUNCE_MS, HOST_CLUSTER_ID, REMUDA_NS,
-  PRODUCT_NAME,
+  PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
 } from '../utils/constants';
 import type { AcmeIssuer, IngressEntry, IssuerKind, RemudaSpec } from '../types';
 
@@ -114,10 +114,18 @@ const acme = ref<AcmeIssuer | undefined>(undefined);
 const hasStorageClass = ref(true);
 const installingStorage = ref(false);
 
-// How a downstream environment will be fronted from the host cluster. Resolved
-// once, at create -- see HopSpec.
-const hopEntry = ref<IngressEntry | undefined>(undefined);
+// Where the *target* cluster's ingress controller answers from outside it.
+// Resolved once, at create. Either the address the hop dials (see HopSpec) or,
+// when there is no hop, the address the environment's own hostname is built
+// from -- one lookup, because both modes need the same answer.
+const targetEntry = ref<IngressEntry | undefined>(undefined);
 const hostIngressClass = ref('');
+const hostBaseDomain = ref('');
+// True while the lookups behind the mode are still in flight. Until they land
+// the host looks like it has no ingress controller, which is a real condition
+// and would otherwise be announced -- and acted on -- for every cluster the
+// user clicks through on their way to the one they want.
+const resolvingExposure = ref(false);
 const hostClusterIssuer = ref('');
 const hostIssuerKind = ref<IssuerKind | undefined>(undefined);
 const hostAcme = ref<AcmeIssuer | undefined>(undefined);
@@ -143,14 +151,35 @@ const hostname = computed(() => (name.value && baseDomain.value ? hostnameFor(na
 const storageUnavailable = computed(() => !hasStorageClass.value && !storageClass.value);
 
 /**
- * TLS terminates wherever the wildcard actually resolves, which for a downstream
- * target is the host cluster and not the target. So the issuer that matters --
- * and the one to warn about -- moves with it. A downstream cluster needs no
- * cert-manager at all.
+ * How this environment will be reached, and why, when the answer is `direct`.
+ *
+ * Resolved from the *host* cluster's own ingress class and domain, because what
+ * is being asked is whether the host can front an environment at all -- see
+ * exposureFor().
  */
-const effectiveIssuer = computed(() => (targetsLocal.value ? clusterIssuer.value : hostClusterIssuer.value));
-const effectiveIssuerKind = computed(() => (targetsLocal.value ? issuerKind.value : hostIssuerKind.value));
-const effectiveAcme = computed(() => (targetsLocal.value ? acme.value : hostAcme.value));
+const exposure = computed(() => exposureFor({
+  targetsLocal:     !!targetsLocal.value,
+  hostIngressClass: hostIngressClass.value,
+  hostBaseDomain:   hostBaseDomain.value,
+}));
+
+const usesDirect = computed(() => exposure.value.mode === 'direct');
+const usesHop = computed(() => exposure.value.mode === 'hop');
+
+/** Named in the banner that explains the fallback, so the two cannot drift. */
+const wildcardSuffix = WILDCARD_DNS_SUFFIX;
+
+/**
+ * TLS terminates wherever the hostname actually resolves, so the issuer that
+ * matters -- and the one to warn about -- moves with it. Only a hopped
+ * environment terminates anywhere but its own cluster: `local` was always on the
+ * target, and `direct` is reached on the target's own ingress, which is what
+ * lets a downstream cluster with cert-manager issue for it.
+ */
+const terminatesOnTarget = computed(() => !usesHop.value);
+const effectiveIssuer = computed(() => (terminatesOnTarget.value ? clusterIssuer.value : hostClusterIssuer.value));
+const effectiveIssuerKind = computed(() => (terminatesOnTarget.value ? issuerKind.value : hostIssuerKind.value));
+const effectiveAcme = computed(() => (terminatesOnTarget.value ? acme.value : hostAcme.value));
 
 /**
  * Whether TLS will come from an Issuer this extension creates rather than one
@@ -161,11 +190,29 @@ const effectiveAcme = computed(() => (targetsLocal.value ? acme.value : hostAcme
  */
 const mirrorsIssuer = computed(() => effectiveIssuerKind.value === 'Issuer' && !!effectiveAcme.value);
 
-/** A downstream target whose entry point could not be found cannot be fronted. */
-const hopUnavailable = computed(() => !targetsLocal.value && !!clusterId.value && !hopEntry.value);
+/**
+ * A downstream target whose entry point could not be found cannot be reached in
+ * either mode: the hop has nothing to dial, and direct has no address to name
+ * the environment after.
+ */
+const entryUnavailable = computed(() => !resolvingExposure.value && !targetsLocal.value && !!clusterId.value && !targetEntry.value);
 
-/** The host ingress controller has to be one that can be told to go upstream over HTTPS. */
-const hopClassUnsupported = computed(() => !targetsLocal.value && !!hostIngressClass.value && !hopSupported(hostIngressClass.value));
+/**
+ * Every mode serves the environment from an Ingress on the target cluster, so a
+ * cluster with no ingress class at all cannot host one. Split in two because the
+ * advice differs sharply: a downstream cluster can be given a controller, and a
+ * Rancher running in docker cannot -- its k3s starts with traefik and servicelb
+ * disabled, and the container publishes only the Rancher server's own ports.
+ */
+const ingressClassMissing = computed(() => !resolvingExposure.value && !!clusterId.value && !ingressClass.value);
+
+/**
+ * A hostname under a bare IP resolves nowhere and no record can change that.
+ * Normally handled by falling back to a wildcard domain, so this only fires when
+ * the fallback could not apply -- a `local` target, or a base domain typed by
+ * hand.
+ */
+const baseDomainUnresolvable = computed(() => isIpLiteral(baseDomain.value));
 
 /** One line under the repository field. Empty when there is nothing to say. */
 const repoStatus = computed(() => {
@@ -199,18 +246,38 @@ const branchStatus = computed(() => {
   return branchesTruncated.value ? i18n.t('remuda.create.branchesPartial', { count: branches.value.length }) : i18n.t('remuda.create.branchesAvailable', { count: branches.value.length });
 });
 
-/** Surfaced because it means the hop leaves the VPC in plain sight. */
-const hopIsPublic = computed(() => hopEntry.value?.addressType === 'ExternalIP');
+/**
+ * Surfaced because it means traffic is in plain sight of the internet: the hop
+ * leaves the VPC to reach it, and a direct environment is answered for by that
+ * public address itself.
+ */
+const publicEntry = computed(() => targetEntry.value?.addressType === 'ExternalIP');
+
+/** Where a direct environment will answer, for the banner that explains why. */
+const entryAddress = computed(() => targetEntry.value?.addresses?.join(', ') || '');
+
+/**
+ * Whether the environment's address is *inside* its hostname, which is what
+ * makes replacing the node a recreate rather than a repoint. Only true of the
+ * wildcard default -- a domain of the team's own can be repointed in DNS like
+ * any other, so saying otherwise would be wrong.
+ */
+const pinnedToAddress = computed(() => usesDirect.value && baseDomain.value.endsWith(WILDCARD_DNS_SUFFIX));
 
 /**
  * Two separate things gate the button. `isFormValid` covers the fields the user
  * types, and is vee-validate's business. The rest are conditions of the target
  * cluster -- no storage class, no reachable ingress -- which no field can be
  * corrected to satisfy, so they stay here and are explained by their banners.
+ *
+ * An unsupported host ingress class is deliberately *not* one of them any more.
+ * It used to block, which was the right answer when the hop was the only way to
+ * reach a downstream environment; now it is simply the reason the create falls
+ * back to reaching it directly.
  */
-const canSubmit = computed(() => isFormValid.value && !!(
+const canSubmit = computed(() => isFormValid.value && !resolvingExposure.value && !!(
   baseDomain.value && ingressClass.value &&
-  !storageUnavailable.value && !hopUnavailable.value && !hopClassUnsupported.value
+  !storageUnavailable.value && !entryUnavailable.value
 ));
 
 // Follow the branch until the user edits the image themselves.
@@ -225,6 +292,16 @@ async function loadDefaults() {
     return;
   }
 
+  resolvingExposure.value = true;
+
+  try {
+    await readDefaults();
+  } finally {
+    resolvingExposure.value = false;
+  }
+}
+
+async function readDefaults() {
   const defaults = await discoverDefaults(store, clusterId.value);
 
   baseDomain.value = defaults.baseDomain;
@@ -244,18 +321,27 @@ async function loadDefaults() {
     backendImage.value = backendImageForBranch(branch.value, serverVersion.value);
   }
 
-  await loadHopDefaults(defaults.ingressClass);
+  await loadTargetExposure(defaults.ingressClass);
 }
 
 /**
- * Everything the host cluster needs to front this environment.
+ * How this target will be reached, and whatever that mode needs.
  *
  * Only for a downstream target: on `local` the environment's own Ingress is
- * already on the cluster the wildcard resolves to.
+ * already on the cluster the base domain resolves to, and there is nothing to
+ * decide.
+ *
+ * The fallback is applied here, by rewriting the base domain rather than by
+ * computing the hostname a second way. Everything downstream of the field --
+ * the hostname, the uniqueness check, the manifests, the prefill saved back to
+ * the cluster -- then works exactly as it does for a Rancher with real DNS, and
+ * the field stays editable, so a name the team actually controls replaces the
+ * default by typing it.
  */
-async function loadHopDefaults(targetIngressClass: string) {
-  hopEntry.value = undefined;
+async function loadTargetExposure(targetIngressClass: string) {
+  targetEntry.value = undefined;
   hostIngressClass.value = '';
+  hostBaseDomain.value = '';
   hostClusterIssuer.value = '';
   hostIssuerKind.value = undefined;
   hostAcme.value = undefined;
@@ -270,10 +356,27 @@ async function loadHopDefaults(targetIngressClass: string) {
   ]);
 
   hostIngressClass.value = host.ingressClass;
+  hostBaseDomain.value = host.baseDomain;
   hostClusterIssuer.value = host.clusterIssuer || '';
   hostIssuerKind.value = host.issuerKind;
   hostAcme.value = host.acme;
-  hopEntry.value = entry;
+  targetEntry.value = entry;
+
+  // A real name already in the field wins, even in the fallback: it is either
+  // this same default written back to the cluster by an earlier create, or a
+  // deliberate override, and neither should be quietly replaced. Only the two
+  // domains that cannot work -- absent, or a bare IP -- are filled in.
+  if (!usesDirect.value || (baseDomain.value && !isIpLiteral(baseDomain.value))) {
+    return;
+  }
+
+  const wildcard = wildcardDomainFor(entry?.addresses?.[0] || '');
+
+  // Empty when the entry is a hostname rather than an address, which already
+  // has a name of its own -- nothing to derive, so the field asks for one.
+  if (wildcard) {
+    baseDomain.value = wildcard;
+  }
 }
 
 watch(clusterId, loadDefaults);
@@ -398,16 +501,23 @@ function buildSpec(): RemudaSpec {
     branch:       branch.value,
     backendImage: backendImage.value,
     hostname:     hostname.value,
+    // Only when the environment answers somewhere other than 443 -- which is
+    // only ever the direct mode's NodePort case, since a hop always arrives on
+    // the host ingress's own 443.
+    entryPort:    usesDirect.value && targetEntry.value?.port !== 443 ? targetEntry.value?.port : undefined,
     owner:        store.getters['auth/principalId']?.split('//')?.pop() || 'unknown',
     createdAt:    new Date().toISOString(),
     namespace:    REMUDA_NS,
     clusterId:    clusterId.value,
-    hop:          targetsLocal.value || !hopEntry.value ? undefined : {
+    // Absent in the direct mode: the hostname resolves to the target cluster
+    // already, so the Ingress written next to the workload is the whole of it
+    // and a second one on the host would front nothing.
+    hop:          !usesHop.value || !targetEntry.value ? undefined : {
       hostClusterId:   HOST_CLUSTER_ID,
       targetClusterId: clusterId.value,
-      addresses:       hopEntry.value.addresses,
-      addressType:     hopEntry.value.addressType,
-      port:            hopEntry.value.port,
+      addresses:       targetEntry.value.addresses,
+      addressType:     targetEntry.value.addressType,
+      port:            targetEntry.value.port,
       ingressClass:    hostIngressClass.value,
       clusterIssuer:   hostClusterIssuer.value || undefined,
       issuerKind:      hostIssuerKind.value,
@@ -442,11 +552,11 @@ function generatePassword(): string {
 
 async function submit(cb: (ok: boolean) => void) {
   try {
-    // Hostnames all come off one wildcard, so they are unique across every
-    // target cluster, not just within one. Checked here rather than left to the
-    // API because the collision surfaces on the *host* cluster, which is not
-    // where the user thinks they are creating anything.
-    if (await hostnameTaken(store, hostname.value)) {
+    // Checked here rather than left to the API because a collision can surface
+    // on a cluster the user does not think they are creating anything on --
+    // either the host cluster, where a hopped hostname is claimed, or the target
+    // cluster, where a direct one is.
+    if (await hostnameTaken(store, hostname.value, clusterId.value)) {
       error.value = i18n.t('remuda.error.hostnameTaken');
       cb(false);
 
@@ -559,24 +669,43 @@ onMounted(async() => {
       :label="i18n.t('remuda.warning.noIssuer')"
     />
     <Banner
-      v-if="hopUnavailable"
+      v-if="ingressClassMissing"
+      color="error"
+      :label="i18n.t(targetsLocal ? 'remuda.warning.noIngressClassLocal' : 'remuda.warning.noIngressClass')"
+    />
+    <Banner
+      v-if="entryUnavailable"
       color="error"
       :label="i18n.t('remuda.warning.noIngressEntry')"
     />
+    <template v-if="usesDirect && !entryUnavailable && !resolvingExposure">
+      <Banner
+        color="info"
+        :label="i18n.t('remuda.warning.directExposure', {
+          reason: i18n.t(`remuda.reason.${ exposure.reason }`),
+          hostname,
+        })"
+      />
+      <Banner
+        v-if="pinnedToAddress"
+        color="warning"
+        :label="i18n.t('remuda.warning.directWildcard', { suffix: wildcardSuffix, address: entryAddress })"
+      />
+    </template>
     <Banner
-      v-if="hopClassUnsupported"
-      color="error"
-      :label="i18n.t('remuda.warning.hopClassUnsupported', { ingressClass: hostIngressClass })"
-    />
-    <Banner
-      v-else-if="hopIsPublic"
+      v-if="publicEntry"
       color="warning"
-      :label="i18n.t('remuda.warning.hopIsPublic', { address: hopEntry?.addresses?.join(', ') })"
+      :label="i18n.t(usesDirect ? 'remuda.warning.directIsPublic' : 'remuda.warning.hopIsPublic', { address: entryAddress })"
     />
     <Banner
       v-if="!baseDomain"
       color="warning"
       :label="i18n.t('remuda.warning.noBaseDomain')"
+    />
+    <Banner
+      v-else-if="baseDomainUnresolvable"
+      color="warning"
+      :label="i18n.t('remuda.warning.baseDomainIsIp', { baseDomain })"
     />
 
     <div class="row mb-20">

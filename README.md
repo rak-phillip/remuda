@@ -100,6 +100,11 @@ from the host Rancher's `server-url`, so for a Rancher at `https://example.ui.ra
 `*.example.ui.rancher.space`. A downstream cluster needs no DNS record of its own; see
 [Downstream clusters](#downstream-clusters).
 
+A management cluster that cannot do this — one reached by IP, or a Rancher running in Docker, whose
+k3s has no ingress controller at all — is not out of luck. Environments on a **downstream** cluster
+fall back to being reached directly there; see [Direct exposure](#direct-exposure-the-fallback). Only
+an environment targeting `local` genuinely needs the management cluster to be able to serve it.
+
 ### TLS needs no setup
 
 A Rancher installed with Let's Encrypt already has an `Issuer` named `rancher` in `cattle-system`,
@@ -146,9 +151,9 @@ created, but with no TLS — the create form warns before you get there.
 
 ### Downstream clusters
 
-An environment's hostname always comes off the management cluster's single wildcard, so that wildcard
-can never point at a downstream cluster. Rather than ask for a second DNS record per cluster, the
-extension creates a **hop** on the management cluster: a selector-less Service, an EndpointSlice
+An environment's hostname normally comes off the management cluster's single wildcard, so that
+wildcard can never point at a downstream cluster. Rather than ask for a second DNS record per cluster,
+the extension creates a **hop** on the management cluster: a selector-less Service, an EndpointSlice
 carrying the downstream cluster's ingress addresses, and an Ingress for the environment's hostname
 (plus a `ServersTransport` where the management cluster runs traefik).
 
@@ -172,6 +177,35 @@ Two consequences worth knowing:
 > foreground** — browsers throttle timers in background tabs. If a downstream node is replaced while
 > nobody is looking, the environment stays unreachable until that page is opened again, or until
 > someone presses **Re-sync networking**.
+
+### Direct exposure (the fallback)
+
+The hop asks two things of the management cluster: an ingress controller that can be pointed upstream
+over HTTPS, and a base domain that can carry a subdomain. A Rancher running in **Docker** has neither.
+Its embedded k3s starts with traefik and servicelb disabled — `kube-system` holds coredns and nothing
+else — so there is no `IngressClass` to write into the hop's Ingress, and one cannot usefully be
+installed either: the container's :443 belongs to the Rancher process, no servicelb exists to fill a
+LoadBalancer, and NodePorts are not published by the `docker run`. Such a Rancher is also typically
+reached by IP, and `my-feature.13.53.41.140` is not a hostname that any DNS record can make resolve.
+
+When either condition holds, a downstream environment is exposed **directly** instead: no hop, and
+the hostname is built from the target cluster's own ingress address using
+[sslip.io](https://sslip.io), which resolves any address embedded in a name. So an environment on a
+cluster whose ingress answers on `44.247.97.31` becomes `my-feature.44.247.97.31.sslip.io`, served by
+the Ingress that already sits next to the workload — exactly as a `local` environment is. Nothing has
+to be registered, and nothing is written to the management cluster at all.
+
+The create form says which of the conditions applied and where the environment will answer. Three
+things follow from it:
+
+- **TLS terminates on the target cluster**, not the management cluster, so its issuer is the one that
+  matters. A cluster without cert-manager gets an environment without TLS, and the form says so.
+- **The address is part of the hostname**, and is baked into the UI bundle's asset URLs at build time.
+  Replacing the target's node means recreating the environment; there is nothing to repoint. (This is
+  what the hop buys, and why it stays the default wherever it can work.)
+- **The base domain is only a default.** Type a domain the team controls and it is used instead, with
+  the wildcard record pointed at the target cluster's ingress — the same arrangement, without the
+  dependency on a third party's DNS.
 
 ### remuda-controller (optional)
 

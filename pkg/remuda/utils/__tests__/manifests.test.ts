@@ -2,7 +2,7 @@ import {
   allManifests, backendDeploymentManifest, buildJobManifest, buildScript, clusterDnsFor,
   issuerAnnotations, issuerManifest,
   dashboardIndexUrl, dataPvcManifest, ingressManifest, inotifyInitContainer, k3sConfigManifest,
-  k3sConfigName, labelsFor, resourceBase, uiDeploymentManifest,
+  environmentUrl, k3sConfigName, labelsFor, resourceBase, uiDeploymentManifest,
 } from '../manifests';
 import {
   K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, UI_BUNDLE_PATH,
@@ -62,6 +62,41 @@ describe('urls', () => {
     expect(dashboardIndexUrl(spec)).toBe(
       'http://multi-idp-ui.rancher-remuda.svc.cluster.local/ui-bundle/index.html'
     );
+  });
+
+  it('leaves the port off when the environment answers on 443', () => {
+    expect(environmentUrl(spec)).toBe('https://multi-idp.prak-bf3b08bd.ui.rancher.space');
+  });
+
+  // Direct exposure onto a NodePort: nothing normalises the port, so both
+  // browser-facing URLs have to carry it -- and they have to agree, because the
+  // bundle is only same-origin with the backend if they do.
+  describe('with an entry port', () => {
+    const onNodePort: RemudaSpec = {
+      ...spec,
+      hostname:  'multi-idp.44.247.97.31.sslip.io',
+      entryPort: 31443,
+    };
+
+    it('carries the port on both browser-facing urls', () => {
+      expect(environmentUrl(onNodePort)).toBe('https://multi-idp.44.247.97.31.sslip.io:31443');
+      expect(resourceBase(onNodePort)).toBe('https://multi-idp.44.247.97.31.sslip.io:31443/ui-bundle');
+    });
+
+    // traefik and nginx both match Host ignoring the port, which is what lets a
+    // :31443 request reach a rule written for the bare name.
+    it('keeps the Ingress host a bare name', () => {
+      const ingress = ingressManifest(onNodePort).body;
+
+      expect(ingress.spec.rules[0].host).toBe('multi-idp.44.247.97.31.sslip.io');
+      expect(ingress.spec.tls[0].hosts).toStrictEqual(['multi-idp.44.247.97.31.sslip.io']);
+    });
+
+    it('leaves the in-cluster index url alone', () => {
+      expect(dashboardIndexUrl(onNodePort)).toBe(
+        'http://multi-idp-ui.rancher-remuda.svc.cluster.local/ui-bundle/index.html'
+      );
+    });
   });
 });
 
