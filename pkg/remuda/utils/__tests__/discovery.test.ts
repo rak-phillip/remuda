@@ -1,7 +1,7 @@
 import {
   backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, discoverDefaults, exposureFor,
   hostIngressDefaults, hostnameFor, ingressEntry, isIpLiteral, pickNestedCidrs, saveDefaults,
-  widenToSixteen, wildcardDomainFor, isWildcardFallbackDomain, wildcardResolves,
+  widenToSixteen, wildcardDomainFor, isWildcardFallbackDomain, probeBaseDomain, parseProbeLog,
 } from '../discovery';
 import { DEFAULT_BACKEND_IMAGE, ENDPOINTS } from '../constants';
 
@@ -536,19 +536,36 @@ describe('isWildcardFallbackDomain', () => {
   });
 });
 
-describe('wildcardResolves', () => {
-  /**
-   * `status` is what the polled Job reports back. `undefined` stands for a Job
-   * that never reaches a verdict, which is the case the caller must not read as
-   * a failure.
-   */
-  function mockStore(status: any, { createFails = false } = {}) {
-    const urls: string[] = [];
+describe('parseProbeLog', () => {
+  it('reads both answers out of the log', () => {
+    expect(parseProbeLog('wildcard=yes\nentry=34.220.244.75\n')).toStrictEqual({ wildcard: true, entryAddress: '34.220.244.75' });
+  });
+
+  it('reads a missing wildcard', () => {
+    expect(parseProbeLog('wildcard=no\nentry=34.220.244.75\n').wildcard).toBe(false);
+  });
+
+  // A line that never arrived is not a "no": acting on it would rewrite a base
+  // domain on the strength of a probe that did not answer.
+  it('is undefined when the wildcard line is absent or unrecognised', () => {
+    expect(parseProbeLog('entry=1.2.3.4').wildcard).toBeUndefined();
+    expect(parseProbeLog('wildcard=\nentry=1.2.3.4').wildcard).toBeUndefined();
+    expect(parseProbeLog('').wildcard).toBeUndefined();
+  });
+
+  // getent prints nothing when the name does not resolve, so entry can be empty.
+  it('ignores an entry that is not an address', () => {
+    expect(parseProbeLog('wildcard=no\nentry=').entryAddress).toBeUndefined();
+    expect(parseProbeLog('wildcard=no\nentry=not-an-ip').entryAddress).toBeUndefined();
+  });
+});
+
+describe('probeBaseDomain', () => {
+  function mockStore(status: any, { createFails = false, log = 'wildcard=no\nentry=34.220.244.75\n' } = {}) {
     const methods: string[] = [];
 
     const store = {
       dispatch: jest.fn(async(_action: string, opts: any) => {
-        urls.push(opts.url);
         methods.push(opts.method || 'GET');
 
         if (opts.method === 'POST') {
@@ -563,55 +580,219 @@ describe('wildcardResolves', () => {
           return {};
         }
 
-        // Namespace and Job reads both land here; only the Job's shape matters.
+        // The shape @rancher/shell's request action actually returns for a
+        // text/plain body -- it wraps anything that is not an object.
+        if (String(opts.url).endsWith('/log')) {
+          return { data: log };
+        }
+
+        if (String(opts.url).includes('labelSelector')) {
+          return { items: [{ metadata: { name: 'probe-pod' } }] };
+        }
+
         return { status };
       }),
     };
 
-    return {
-      store, urls, methods
-    };
+    return { store, methods };
   }
 
-  it('reads a succeeded probe as the wildcard resolving', async() => {
+  it('returns the verdict and the address from the probe log', async() => {
     const { store } = mockStore({ succeeded: 1 });
 
-    expect(await wildcardResolves(store, 'local', 'example.com')).toBe(true);
+    expect(await probeBaseDomain(store, 'local', 'example.com', 'example.com')).toStrictEqual({ wildcard: false, entryAddress: '34.220.244.75' });
   });
 
-  // getent exits non-zero on NXDOMAIN and backoffLimit is 0, so one failure is
-  // the answer rather than something to retry.
-  it('reads a failed probe as the wildcard missing', async() => {
+  it('reads a wildcard that resolves', async() => {
+    const { store } = mockStore({ succeeded: 1 }, { log: 'wildcard=yes\nentry=34.220.244.75\n' });
+
+    expect((await probeBaseDomain(store, 'local', 'example.com', 'example.com')).wildcard).toBe(true);
+  });
+
+  // The script always exits 0, so a failed Job means it never ran -- which says
+  // nothing about the domain.
+  it('treats a failed Job as no verdict rather than a missing wildcard', async() => {
     const { store } = mockStore({ failed: 1 });
 
-    expect(await wildcardResolves(store, 'local', 'example.com')).toBe(false);
+    expect(await probeBaseDomain(store, 'local', 'example.com', 'example.com')).toStrictEqual({});
   });
 
-  // The distinction that keeps a working cluster from being rewritten to sslip.
-  it('is undefined when the probe cannot be created at all', async() => {
+  it('gives no verdict when the probe cannot be created at all', async() => {
     const { store } = mockStore({ succeeded: 1 }, { createFails: true });
 
-    expect(await wildcardResolves(store, 'local', 'example.com')).toBeUndefined();
+    expect(await probeBaseDomain(store, 'local', 'example.com', 'example.com')).toStrictEqual({});
   });
 
-  it('is undefined when the probe never reaches a verdict before the deadline', async() => {
+  it('gives no verdict when nothing lands before the deadline', async() => {
     const { store } = mockStore({});
 
-    expect(await wildcardResolves(store, 'local', 'example.com', 0)).toBeUndefined();
+    expect(await probeBaseDomain(store, 'local', 'example.com', 'example.com', 0)).toStrictEqual({});
   });
 
   it('does not probe a base domain that is an address, since nothing can hang under one', async() => {
     const { store } = mockStore({ succeeded: 1 });
 
-    expect(await wildcardResolves(store, 'local', '13.53.41.140')).toBeUndefined();
+    expect(await probeBaseDomain(store, 'local', '13.53.41.140', 'x')).toStrictEqual({});
     expect(store.dispatch).not.toHaveBeenCalled();
   });
 
-  it('cleans the probe up once it has answered', async() => {
-    const { store, methods } = mockStore({ succeeded: 1 });
+  // A plain DELETE orphans the probe's pod, and nothing is left to clean that
+  // up once the Job carrying the TTL is gone.
+  it('deletes the probe Job and its pod once it has answered', async() => {
+    const urls: string[] = [];
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        if (opts.method === 'DELETE') {
+          urls.push(String(opts.url));
 
-    await wildcardResolves(store, 'local', 'example.com');
+          return {};
+        }
 
-    expect(methods).toContain('DELETE');
+        if (opts.method === 'POST') {
+          return {};
+        }
+
+        if (String(opts.url).endsWith('/log')) {
+          return { data: 'wildcard=no\nentry=1.2.3.4\n' };
+        }
+
+        if (String(opts.url).includes('labelSelector')) {
+          return { items: [{ metadata: { name: 'probe-pod' } }] };
+        }
+
+        return { status: { succeeded: 1 } };
+      }),
+    };
+
+    await probeBaseDomain(store, 'local', 'example.com', 'example.com');
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('propagationPolicy=Background');
+    expect(urls[0]).toContain('remuda-dns-probe-');
+  });
+});
+
+describe('probeBaseDomain log shapes', () => {
+  function storeReturning(logBody: any) {
+    return {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        if (opts.method === 'POST' || opts.method === 'DELETE') {
+          return {};
+        }
+
+        if (String(opts.url).endsWith('/log')) {
+          return logBody;
+        }
+
+        if (String(opts.url).includes('labelSelector')) {
+          return { items: [{ metadata: { name: 'probe-pod' } }] };
+        }
+
+        return { status: { succeeded: 1 } };
+      }),
+    };
+  }
+
+  const answer = 'wildcard=no\nentry=34.220.244.75\n';
+
+  // The regression: a wrapped body read as a string gives '[object Object]',
+  // which parses to no verdict and silently keeps the previous base domain.
+  it('reads a log the store wrapped as { data }', async() => {
+    const result = await probeBaseDomain(storeReturning({ data: answer }), 'local', 'example.com', 'example.com');
+
+    expect(result).toStrictEqual({ wildcard: false, entryAddress: '34.220.244.75' });
+  });
+
+  it('still reads a log that arrives as a plain string', async() => {
+    const result = await probeBaseDomain(storeReturning(answer), 'local', 'example.com', 'example.com');
+
+    expect(result).toStrictEqual({ wildcard: false, entryAddress: '34.220.244.75' });
+  });
+
+  // An error Status body is an object with no `data`, so it must read as no
+  // verdict rather than as a missing wildcard.
+  it('gives no verdict when the log endpoint returns an error object', async() => {
+    const status = {
+      kind: 'Status', status: 'Failure', message: 'is waiting to start: ContainerCreating'
+    };
+    const result = await probeBaseDomain(storeReturning(status), 'local', 'example.com', 'example.com');
+
+    // Absent rather than false: the caller acts only on a real verdict.
+    expect(result.wildcard).toBeUndefined();
+    expect(result.entryAddress).toBeUndefined();
+  });
+});
+
+describe('probeBaseDomain concurrency', () => {
+  // The create form loads defaults twice on mount; without coalescing that is
+  // two pods and two waits for one answer.
+  it('runs one probe for concurrent calls with the same question', async() => {
+    const creates: string[] = [];
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        if (opts.method === 'POST') {
+          creates.push(String(opts.url));
+
+          return {};
+        }
+
+        if (opts.method === 'DELETE') {
+          return {};
+        }
+
+        if (String(opts.url).endsWith('/log')) {
+          return { data: 'wildcard=no\nentry=1.2.3.4\n' };
+        }
+
+        if (String(opts.url).includes('labelSelector')) {
+          return { items: [{ metadata: { name: 'probe-pod' } }] };
+        }
+
+        return { status: { succeeded: 1 } };
+      }),
+    };
+
+    const [a, b] = await Promise.all([
+      probeBaseDomain(store, 'local', 'example.com', 'example.com'),
+      probeBaseDomain(store, 'local', 'example.com', 'example.com'),
+    ]);
+
+    expect(a).toStrictEqual(b);
+    expect(creates.filter((u) => u.includes('job'))).toHaveLength(1);
+  });
+
+  // Coalescing must not turn into caching: a later call gets a fresh probe.
+  it('probes again once the first has settled', async() => {
+    let jobs = 0;
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        if (opts.method === 'POST') {
+          if (String(opts.url).includes('job')) {
+            jobs++;
+          }
+
+          return {};
+        }
+
+        if (opts.method === 'DELETE') {
+          return {};
+        }
+
+        if (String(opts.url).endsWith('/log')) {
+          return { data: 'wildcard=yes\nentry=1.2.3.4\n' };
+        }
+
+        if (String(opts.url).includes('labelSelector')) {
+          return { items: [{ metadata: { name: 'probe-pod' } }] };
+        }
+
+        return { status: { succeeded: 1 } };
+      }),
+    };
+
+    await probeBaseDomain(store, 'local', 'example.com', 'example.com');
+    await probeBaseDomain(store, 'local', 'example.com', 'example.com');
+
+    expect(jobs).toBe(2);
   });
 });

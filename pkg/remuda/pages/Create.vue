@@ -16,7 +16,7 @@ import { useText } from '../utils/i18n';
 import { createEnvironment, hostnameTaken, installLocalPathStorage, readyClusters } from '../utils/api';
 import {
   backendImageForBranch, discoverDefaults, exposureFor, hostIngressDefaults, hostnameFor, ingressEntry,
-  isIpLiteral, isWildcardFallbackDomain, saveDefaults, wildcardDomainFor, wildcardResolves,
+  isIpLiteral, isWildcardFallbackDomain, probeBaseDomain, saveDefaults, wildcardDomainFor,
 } from '../utils/discovery';
 import { isCloneableRepo } from '../utils/validate';
 import { createBranchField } from '../utils/branch-field';
@@ -108,6 +108,9 @@ const baseDomain = ref('');
 const wildcardChecked = ref(false);
 const wildcardMissing = ref(false);
 const derivedBaseDomain = ref('');
+// The wildcard is missing *and* no address could be derived to fall back to, so
+// the field has nothing to offer and has to ask.
+const wildcardNoAddress = ref(false);
 const serverVersion = ref('');
 const ingressClass = ref('');
 const storageClass = ref('');
@@ -370,32 +373,30 @@ async function applyWildcardFallback(derived: string) {
   wildcardChecked.value = false;
   derivedBaseDomain.value = derived;
 
-  const resolves = await wildcardResolves(store, HOST_CLUSTER_ID, derived);
+  const { wildcard, entryAddress } = await probeBaseDomain(store, HOST_CLUSTER_ID, derived, derived);
 
   // Inconclusive: no verdict is not a failing verdict, so nothing moves.
-  if (resolves === undefined) {
+  if (wildcard === undefined) {
     return;
   }
 
   wildcardChecked.value = true;
 
-  if (resolves) {
+  if (wildcard) {
     baseDomain.value = derived;
     wildcardMissing.value = false;
 
     return;
   }
 
-  // The ingress that will answer for the environment is the host's in every
-  // mode that uses this domain -- `local` is on the host cluster, and `hop`
-  // terminates there -- so that is the address to name it after.
-  const entry = await ingressEntry(store, HOST_CLUSTER_ID, hostIngressClass.value || ingressClass.value);
-  const fallback = wildcardDomainFor(entry?.addresses?.[0] || '');
+  // The probe's own answer for where this Rancher's name resolves, which is the
+  // address a browser reaches it at. Deliberately not the ingress Service's
+  // address: k3s servicelb publishes the node's private VPC IP there, and an
+  // environment named after that resolves to somewhere no browser can go.
+  const fallback = wildcardDomainFor(entryAddress || '');
 
-  // Empty when the host ingress publishes a hostname rather than an address.
-  // That name has no wildcard of ours to offer either, so the field is left
-  // asking rather than filled with something that resolves nowhere.
   wildcardMissing.value = true;
+  wildcardNoAddress.value = !fallback;
 
   if (fallback) {
     baseDomain.value = fallback;
@@ -786,7 +787,12 @@ onMounted(async() => {
       :label="i18n.t('remuda.warning.baseDomainIsIp', { baseDomain })"
     />
     <Banner
-      v-if="wildcardChecked && wildcardMissing"
+      v-if="wildcardChecked && wildcardMissing && wildcardNoAddress"
+      color="warning"
+      :label="i18n.t('remuda.warning.wildcardNoAddress', { derived: derivedBaseDomain })"
+    />
+    <Banner
+      v-else-if="wildcardChecked && wildcardMissing"
       color="info"
       :label="i18n.t('remuda.warning.wildcardMissing', { derived: derivedBaseDomain, baseDomain })"
     />

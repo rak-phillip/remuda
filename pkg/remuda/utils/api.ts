@@ -29,8 +29,21 @@ export function create(store: any, clusterId: string, { endpoint, body }: Manife
   });
 }
 
-export function remove(store: any, clusterId: string, endpoint: string, namespace: string, name: string): Promise<any> {
-  return store.dispatch('management/request', { url: resourceUrl(clusterId, endpoint, namespace, name), method: 'DELETE' });
+/**
+ * Delete one object.
+ *
+ * `cascade` matters for anything with dependents, and Jobs above all: batch/v1
+ * defaults to **Orphan** propagation, so a plain delete takes the Job and leaves
+ * its pods behind with no owner and nothing left to collect them. Steve passes
+ * the policy through to the API server -- measured, both ways -- so this is the
+ * whole fix wherever a Job is deleted and its pods are not swept separately.
+ */
+export function remove(
+  store: any, clusterId: string, endpoint: string, namespace: string, name: string, cascade = false
+): Promise<any> {
+  const url = `${ resourceUrl(clusterId, endpoint, namespace, name) }${ cascade ? '?propagationPolicy=Background' : '' }`;
+
+  return store.dispatch('management/request', { url, method: 'DELETE' });
 }
 
 export async function ensureNamespace(store: any, clusterId: string, namespace = REMUDA_NS): Promise<void> {
@@ -256,7 +269,11 @@ export async function rebuildUi(store: any, clusterId: string, spec: RemudaSpec)
 
   for (const job of jobs?.data || []) {
     if (job.metadata?.labels?.[LABEL_NAME] === spec.name) {
-      await remove(store, clusterId, ENDPOINTS.job, spec.namespace, job.metadata.name);
+      // Cascading: nothing sweeps this Job's pods afterwards the way
+      // deleteEnvironment's does, so without it every rebuild strands the
+      // previous build's pod -- still holding the ui and cache claims it
+      // mounted, which is what makes a stranded build pod expensive.
+      await remove(store, clusterId, ENDPOINTS.job, spec.namespace, job.metadata.name, true);
     }
   }
 

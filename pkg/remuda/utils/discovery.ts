@@ -54,34 +54,64 @@ export function wildcardDomainFor(address: string): string {
 export const isWildcardFallbackDomain = (domain: string): boolean => (domain || '').endsWith(`.${ WILDCARD_DNS_SUFFIX }`);
 
 /**
- * Whether `*.<baseDomain>` resolves, from inside the cluster that will serve it.
+ * What the cluster's own resolver says about a base domain.
  *
- * Three-valued on purpose. `true` and `false` are the probe's verdict;
- * `undefined` means it never reached one -- no permission to create the Job, no
- * node to schedule it, an image it could not pull, or the caller gave up
+ * `wildcard` is three-valued on purpose. `true` and `false` are the probe's
+ * verdict; `undefined` means it never reached one -- no permission to create the
+ * Job, no node to schedule it, an image it could not pull, or the caller gave up
  * waiting. That distinction is the whole point: an inconclusive probe must leave
  * the base domain alone. Rewriting a working domain to sslip.io because a Job
  * could not be scheduled would break a cluster that was fine, which is a worse
  * failure than the one this exists to catch.
+ *
+ * `entryAddress` is where the host Rancher's own name resolves, which is the
+ * address to build a fallback hostname on. See dnsProbeScript for why it is not
+ * read off the ingress Service.
  */
-export async function wildcardResolves(
-  store: any, clusterId: string, baseDomain: string, timeoutMs = DNS_PROBE_TIMEOUT_MS
-): Promise<boolean | undefined> {
-  if (!baseDomain || isIpLiteral(baseDomain)) {
-    return undefined;
+export async function probeBaseDomain(
+  store: any, clusterId: string, baseDomain: string, serverHost: string, timeoutMs = DNS_PROBE_TIMEOUT_MS
+): Promise<{ wildcard?: boolean; entryAddress?: string }> {
+  if (!baseDomain || isIpLiteral(baseDomain) || !serverHost) {
+    return {};
   }
 
+  // The create form loads its defaults twice on mount -- onMounted assigns
+  // clusterId, which fires the watcher, and then calls loadDefaults itself --
+  // which used to cost a duplicate API call and now would cost a second pod and
+  // a second wait for the same answer. Coalesce only what is genuinely in
+  // flight: the entry is dropped as soon as it settles, so this never serves a
+  // stale verdict.
+  const key = `${ clusterId }|${ baseDomain }|${ serverHost }`;
+  const inFlight = probesInFlight.get(key);
+
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const run = runProbe(store, clusterId, baseDomain, serverHost, timeoutMs)
+    .finally(() => probesInFlight.delete(key));
+
+  probesInFlight.set(key, run);
+
+  return run;
+}
+
+const probesInFlight = new Map<string, Promise<{ wildcard?: boolean; entryAddress?: string }>>();
+
+async function runProbe(
+  store: any, clusterId: string, baseDomain: string, serverHost: string, timeoutMs: number
+): Promise<{ wildcard?: boolean; entryAddress?: string }> {
   // Lowercase: a DNS label is case-insensitive, but a Kubernetes object name is
   // not allowed uppercase at all, and this string is both.
   const probeId = `p${ Math.random().toString(36).slice(2, 10) }`.toLowerCase();
-  const manifest = dnsProbeJobManifest(baseDomain, probeId);
+  const manifest = dnsProbeJobManifest(baseDomain, probeId, serverHost);
   const name = manifest.body.metadata.name;
 
   try {
     await ensureNamespace(store, clusterId);
     await create(store, clusterId, manifest);
   } catch {
-    return undefined;
+    return {};
   }
 
   try {
@@ -90,25 +120,75 @@ export async function wildcardResolves(
     while (Date.now() < deadline) {
       const job = await store.dispatch('management/request', { url: `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.job }/${ REMUDA_NS }/${ name }` }).catch(() => undefined);
 
-      // Both are counts, and backoffLimit is 0, so the first one to appear is
-      // the verdict: exit 0 from getent means the name resolved.
-      if (job?.status?.succeeded) {
-        return true;
+      // The script always exits 0, so a failed Job means something stopped it
+      // from running at all -- which is not a verdict about the domain.
+      if (job?.status?.failed) {
+        return {};
       }
 
-      if (job?.status?.failed) {
-        return false;
+      if (job?.status?.succeeded) {
+        return parseProbeLog(await probeLog(store, clusterId, name));
       }
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 
-    return undefined;
+    return {};
   } finally {
     // ttlSecondsAfterFinished would get there eventually; this keeps the
     // namespace tidy for the common case where the answer arrived.
-    remove(store, clusterId, ENDPOINTS.job, REMUDA_NS, name).catch(() => undefined);
+    //
+    // Cascading, so the probe's *pod* goes with its Job. A plain delete orphans
+    // it, and an orphaned probe pod has nothing left to collect it -- the TTL
+    // that would have is a field on the Job -- so every create would leave one
+    // behind for good.
+    remove(store, clusterId, ENDPOINTS.job, REMUDA_NS, name, true).catch(() => undefined);
   }
+}
+
+/**
+ * The probe pod's log.
+ *
+ * Read through the core API rather than Steve: this is a subresource, and Steve
+ * models resources rather than proxying arbitrary subresources of them.
+ */
+async function probeLog(store: any, clusterId: string, jobName: string): Promise<string> {
+  const base = `/k8s/clusters/${ clusterId }/api/v1/namespaces/${ REMUDA_NS }/pods`;
+
+  try {
+    const pods = await store.dispatch('management/request', { url: `${ base }?labelSelector=job-name%3D${ jobName }` });
+    const pod = pods?.items?.[0]?.metadata?.name;
+
+    if (!pod) {
+      return '';
+    }
+
+    const res = await store.dispatch('management/request', { url: `${ base }/${ pod }/log` });
+
+    // The store's request action wraps any non-object body: `responseObject` in
+    // @rancher/shell's steve actions does `out = { data: out }` when the parsed
+    // response is not an object. A pod log is text/plain, so it arrives as
+    // `{ data: '<log>' }` rather than as the string, and reading it as a string
+    // silently yields '[object Object]' -- which parses to no verdict at all,
+    // and leaves the base domain on whatever was saved last.
+    return (typeof res === 'string' ? res : res?.data) || '';
+  } catch {
+    return '';
+  }
+}
+
+/** `wildcard=yes|no` and `entry=<address>`, one per line. */
+export function parseProbeLog(log: string): { wildcard?: boolean; entryAddress?: string } {
+  const value = (key: string) => (String(log || '').match(new RegExp(`^${ key }=(.*)$`, 'm'))?.[1] || '').trim();
+  const wildcard = value('wildcard');
+  const entry = value('entry');
+
+  return {
+    // An absent or unrecognised line is not a "no" -- it means the probe did not
+    // answer, and the caller must not act on it.
+    wildcard:     wildcard === 'yes' ? true : (wildcard === 'no' ? false : undefined),
+    entryAddress: isIpLiteral(entry) ? entry : undefined,
+  };
 }
 
 /**

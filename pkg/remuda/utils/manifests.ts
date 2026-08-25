@@ -533,25 +533,54 @@ export function ingressManifest(spec: RemudaSpec): ManifestRequest {
 }
 
 /**
- * A Job that asks whether a name under the base domain resolves.
+ * Script the probe runs. Answers two questions in one pod, because they are
+ * needed together and a second Job would double the wait.
  *
- * The question is whether `*.<baseDomain>` exists, so the name probed is a
- * random one: a wildcard answers for any label, while a domain carrying only
- * specific records answers for none of the ones we would invent. Without this
- * the check would pass on the base domain's own A record and prove nothing --
- * which is exactly the case that fails, since a Rancher's own hostname always
- * resolves whether or not anything is hung beneath it.
+ * 1. Does `*.<baseDomain>` resolve? The name probed is a random one: a wildcard
+ *    answers for any label, while a domain carrying only specific records
+ *    answers for none we would invent. Probing the base domain itself would
+ *    pass on its own A record and prove nothing -- which is exactly the case
+ *    that fails, since a Rancher's own hostname always resolves whether or not
+ *    anything is hung beneath it.
  *
- * It runs in the cluster rather than the browser because that is the resolver
- * whose answer matters: the same view cert-manager takes when it self-checks an
+ * 2. What address does the host Rancher's own name resolve to? That is the
+ *    address a browser reaches this Rancher at, and so the one to name a
+ *    fallback hostname after. It is deliberately *not* read from the ingress
+ *    Service: k3s's built-in servicelb reports the node's own address as the
+ *    LoadBalancer ingress IP, which on any cloud node is the private VPC one --
+ *    a perfectly valid-looking answer that resolves to somewhere no browser can
+ *    reach.
+ *
+ * Always exits 0. The verdict travels in the log rather than the exit status,
+ * so a Job that ran at all is a Job that answered, and one that failed means
+ * something stopped it from running rather than that the name was missing.
+ */
+export function dnsProbeScript(): string {
+  return [
+    'w=no',
+    'getent hosts "$PROBE" >/dev/null 2>&1 && w=yes',
+    'echo "wildcard=$w"',
+    // ahostsv4: a AAAA-first answer would give an address sslip.io cannot carry.
+    `echo "entry=$(getent ahostsv4 "$HOST" 2>/dev/null | awk '{print $1}' | head -1)"`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * A short-lived Job that reports on the base domain from inside the cluster.
+ *
+ * In the cluster rather than the browser because that is the resolver whose
+ * answer matters: the same view cert-manager takes when it self-checks an
  * HTTP-01 challenge, and the one that honours a private or split-horizon zone
  * that a public resolver cannot see.
  *
- * `backoffLimit: 0` so NXDOMAIN is a verdict rather than something to retry, and
  * `ttlSecondsAfterFinished` so an abandoned probe still cleans itself up if the
- * form is closed before it can be deleted.
+ * form is closed before it can be deleted -- long enough that its log is still
+ * readable when the answer is collected.
  */
-export function dnsProbeJobManifest(baseDomain: string, probeId: string, namespace = REMUDA_NS): ManifestRequest {
+export function dnsProbeJobManifest(
+  baseDomain: string, probeId: string, serverHost: string, namespace = REMUDA_NS
+): ManifestRequest {
   const name = `remuda-dns-probe-${ probeId }`;
 
   return {
@@ -564,16 +593,20 @@ export function dnsProbeJobManifest(baseDomain: string, probeId: string, namespa
       },
       spec: {
         backoffLimit:            0,
-        ttlSecondsAfterFinished: 120,
+        ttlSecondsAfterFinished: 300,
         activeDeadlineSeconds:   20,
         template:                {
           metadata: { labels: { [LABEL_MANAGED]: 'true', [LABEL_ROLE]: ROLE_PROBE } },
           spec:     {
             restartPolicy: 'Never',
             containers:    [{
-              name:      'probe',
-              image:     DNS_PROBE_IMAGE,
-              command:   ['getent', 'hosts', `${ probeId }.${ baseDomain }`],
+              name:    'probe',
+              image:   DNS_PROBE_IMAGE,
+              command: ['sh', '-c', dnsProbeScript()],
+              env:     [
+                { name: 'PROBE', value: `${ probeId }.${ baseDomain }` },
+                { name: 'HOST', value: serverHost },
+              ],
               resources: {
                 requests: { cpu: '10m', memory: '16Mi' },
                 limits:   { cpu: '100m', memory: '64Mi' },

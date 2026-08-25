@@ -4,6 +4,7 @@ import {
   dashboardIndexUrl, dataPvcManifest, ingressManifest, inotifyInitContainer, k3sConfigManifest,
   environmentUrl, k3sConfigName, labelsFor, resourceBase, uiDeploymentManifest,
   sharedDashboardIndexUrl, uiNginxConfigManifest, uiNginxConfigName, dnsProbeJobManifest,
+  dnsProbeScript,
 } from '../manifests';
 import {
   K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, NGINX_CONFIG_PATH, UI_BUNDLE_PATH,
@@ -546,17 +547,23 @@ describe('allManifests issuer ordering', () => {
 
 
 describe('dnsProbeJobManifest', () => {
-  const job = dnsProbeJobManifest('example.com', 'pabc1234').body;
+  const job = dnsProbeJobManifest('example.com', 'pabc1234', 'rancher.example.com').body;
   const podSpec = job.spec.template.spec;
+  const env = Object.fromEntries(podSpec.containers[0].env.map((e: any) => [e.name, e.value]));
 
   // The base domain's own record always resolves; only an invented label says
   // whether a wildcard is there.
   it('probes a name under the domain rather than the domain itself', () => {
-    expect(podSpec.containers[0].command).toStrictEqual(['getent', 'hosts', 'pabc1234.example.com']);
+    expect(env.PROBE).toBe('pabc1234.example.com');
   });
 
-  // NXDOMAIN is the answer, not a flake, so a retry would only delay it.
-  it('does not retry, so one failure is the verdict', () => {
+  // Where the fallback hostname's address comes from, and the reason the ingress
+  // Service is not consulted for it.
+  it('also resolves the host Rancher\'s own name', () => {
+    expect(env.HOST).toBe('rancher.example.com');
+  });
+
+  it('does not retry', () => {
     expect(job.spec.backoffLimit).toBe(0);
     expect(podSpec.restartPolicy).toBe('Never');
   });
@@ -571,5 +578,26 @@ describe('dnsProbeJobManifest', () => {
   it('carries no environment labels', () => {
     expect(job.metadata.labels[LABEL_NAME]).toBeUndefined();
     expect(job.metadata.labels[LABEL_MANAGED]).toBe('true');
+  });
+});
+
+describe('dnsProbeScript', () => {
+  const script = dnsProbeScript();
+
+  it('reports both answers on their own lines', () => {
+    expect(script).toContain('echo "wildcard=$w"');
+    expect(script).toContain('entry=$(getent ahostsv4 "$HOST"');
+  });
+
+  // A AAAA-first answer would hand back an address sslip.io cannot carry.
+  it('asks for IPv4 only', () => {
+    expect(script).toContain('ahostsv4');
+  });
+
+  // The verdict travels in the log, so the script must not fail the Job when the
+  // name simply does not resolve.
+  it('does not let a missing name fail the job', () => {
+    expect(script).toContain('getent hosts "$PROBE" >/dev/null 2>&1 && w=yes');
+    expect(script).not.toContain('set -e');
   });
 });

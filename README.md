@@ -156,22 +156,33 @@ Waiting for HTTP-01 challenge propagation: failed to perform self check GET
 because Let's Encrypt could not resolve the name either.
 
 So the base domain is now checked before anything is created. Remuda runs a short-lived Job on the
-management cluster that asks whether a **random** name under the base domain resolves — random because
-a wildcard answers for any label, while a domain carrying only specific records answers for none we
-would invent. Probing the base domain itself would pass on its own A record and prove nothing.
+management cluster that answers two questions at once, and reports both in its log.
 
-The Job's own exit status is the whole result (`getent` exits 0 on a name that resolves, non-zero on
-NXDOMAIN), so nothing has to read logs back, and `backoffLimit: 0` keeps NXDOMAIN a verdict rather than
-something to retry. It runs in the cluster rather than the browser deliberately: that is the resolver
-whose answer matters — the same view cert-manager takes when it self-checks a challenge, and the one
-that honours a private or split-horizon zone a public resolver cannot see.
+**Does a random name under the base domain resolve?** Random because a wildcard answers for any label,
+while a domain carrying only specific records answers for none we would invent. Probing the base domain
+itself would pass on its own A record and prove nothing.
+
+**What address does the host Rancher's own name resolve to?** That is the address a browser reaches
+this Rancher at, and so the one to name a fallback hostname after. It is deliberately *not* read from
+the ingress Service: k3s's built-in servicelb publishes the node's own address as the LoadBalancer
+ingress IP, which on a cloud node is the **private VPC address**. That looks like a perfectly good
+answer and produces a hostname that resolves to somewhere no browser can reach — an `10.0.24.13.sslip.io`
+that fails in a way indistinguishable from having no DNS at all.
+
+The probe runs in the cluster rather than the browser deliberately: that is the resolver whose answer
+matters — the same view cert-manager takes when it self-checks a challenge, and the one that honours a
+private or split-horizon zone a public resolver cannot see. The script always exits 0, so a Job that
+ran is a Job that answered, and a *failed* Job means something stopped it rather than that the name
+was missing.
 
 What happens with the answer:
 
 - **Resolves** — the derived domain is used, exactly as before. Nothing of ours is involved.
-- **Does not resolve** — the base domain becomes `<ingress-address>.sslip.io`, which resolves to the
-  cluster's ingress with nothing to create and nothing to maintain. The form says so rather than
+- **Does not resolve** — the base domain becomes `<rancher-address>.sslip.io`, using the address the
+  probe resolved, which needs nothing created and nothing maintained. The form says so rather than
   quietly changing the address.
+- **Does not resolve, and no address came back** — nothing is filled in and the form asks for a base
+  domain, rather than offering one that cannot work.
 - **No verdict** — no permission to create the Job, nothing to schedule it, or it timed out. The base
   domain is left alone. An inconclusive probe is not a failing one, and rewriting a working domain
   because a Job could not be scheduled would break a cluster that was fine.

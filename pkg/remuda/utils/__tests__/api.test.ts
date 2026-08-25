@@ -1,5 +1,5 @@
 import {
-  collectionUrl, deleteEnvironment, hostnameTaken, resourceUrl, resyncHop,
+  collectionUrl, deleteEnvironment, hostnameTaken, rebuildUi, resourceUrl, resyncHop,
   setEnvironmentRunning,
 } from '../api';
 import { CONFIG_MAP_NAME, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME } from '../constants';
@@ -366,5 +366,84 @@ describe('setEnvironmentRunning', () => {
     };
 
     await expect(setEnvironmentRunning(store, 'local', spec, false)).rejects.toThrow('forbidden');
+  });
+});
+
+
+describe('rebuildUi', () => {
+  const spec = {
+    name: 'multi-idp', namespace: 'rancher-remuda', branch: 'task/17295-multi-idp'
+  } as any;
+
+  function mockStore() {
+    const deletes: string[] = [];
+    const posts: string[] = [];
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        if (opts.method === 'DELETE') {
+          deletes.push(String(opts.url));
+
+          return {};
+        }
+
+        if (opts.method === 'POST') {
+          posts.push(String(opts.url));
+
+          return {};
+        }
+
+        return { data: [{ metadata: { name: 'multi-idp-build-1', labels: { [LABEL_NAME]: 'multi-idp' } } }] };
+      }),
+    };
+
+    return {
+      store, deletes, posts
+    };
+  }
+
+  /**
+   * batch/v1 defaults to Orphan propagation, and unlike deleteEnvironment
+   * nothing sweeps the pods afterwards -- so without cascading, every rebuild
+   * strands the previous build's pod holding the ui and cache claims.
+   */
+  it('deletes the previous build Job with its pods', async() => {
+    const { store, deletes } = mockStore();
+
+    await rebuildUi(store, 'local', spec);
+
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]).toContain('multi-idp-build-1');
+    expect(deletes[0]).toContain('propagationPolicy=Background');
+  });
+
+  it('starts a new build afterwards', async() => {
+    const { store, posts } = mockStore();
+
+    await rebuildUi(store, 'local', spec);
+
+    expect(posts.some((u) => u.includes(ENDPOINTS.job))).toBe(true);
+  });
+
+  it('leaves another environment\'s build job alone', async() => {
+    const deletes: string[] = [];
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        if (opts.method === 'DELETE') {
+          deletes.push(String(opts.url));
+
+          return {};
+        }
+
+        if (opts.method === 'POST') {
+          return {};
+        }
+
+        return { data: [{ metadata: { name: 'other-build-1', labels: { [LABEL_NAME]: 'other' } } }] };
+      }),
+    };
+
+    await rebuildUi(store, 'local', spec);
+
+    expect(deletes).toHaveLength(0);
   });
 });

@@ -236,6 +236,11 @@ remuda:
       {baseDomain} is an address, not a domain, so the environment's hostname
       resolves nowhere and no DNS record can change that. Set a base domain that
       can carry a subdomain.
+    wildcardNoAddress: >-
+      Nothing resolves under {derived}, and no address could be derived to fall
+      back to, so an environment named beneath it would be unreachable. Add a
+      wildcard DNS record for *.{derived} pointing at this cluster's ingress, or
+      set a base domain of your own below.
     wildcardMissing: >-
       Nothing resolves under {derived}, so an environment named beneath it would
       be unreachable and its certificate would never issue. Using {baseDomain}
