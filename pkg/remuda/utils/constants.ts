@@ -81,6 +81,9 @@ export const UI_BUNDLE_PATH = 'ui-bundle';
 export const BUILD_IMAGE = 'node:24';
 export const SERVE_IMAGE = 'nginx:alpine';
 
+/** Where nginx's stock nginx.conf includes server blocks from. */
+export const NGINX_CONFIG_PATH = '/etc/nginx/conf.d/default.conf';
+
 export const DEFAULT_BACKEND_IMAGE = 'rancher/rancher:head';
 
 /** Registries a Rancher server image is commonly pulled from. */

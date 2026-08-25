@@ -3,9 +3,10 @@ import {
   issuerAnnotations, issuerManifest,
   dashboardIndexUrl, dataPvcManifest, ingressManifest, inotifyInitContainer, k3sConfigManifest,
   environmentUrl, k3sConfigName, labelsFor, resourceBase, uiDeploymentManifest,
+  sharedDashboardIndexUrl, uiNginxConfigManifest, uiNginxConfigName,
 } from '../manifests';
 import {
-  K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, UI_BUNDLE_PATH,
+  K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, NGINX_CONFIG_PATH, UI_BUNDLE_PATH,
 } from '../constants';
 import type { RemudaSpec } from '../../types';
 
@@ -202,15 +203,56 @@ describe('pvc', () => {
 });
 
 describe('uiDeploymentManifest', () => {
-  it('mounts the bundle read-only at nginx root so /ui-bundle resolves with no rewrite', () => {
-    const podSpec = uiDeploymentManifest(spec).body.spec.template.spec;
+  const podSpec = uiDeploymentManifest(spec).body.spec.template.spec;
 
-    expect(podSpec.containers[0].volumeMounts).toStrictEqual([
-      {
-        name: 'bundle', mountPath: '/usr/share/nginx/html', readOnly: true
-      },
-    ]);
+  it('mounts the bundle read-only at nginx root so /ui-bundle resolves with no rewrite', () => {
+    expect(podSpec.containers[0].volumeMounts[0]).toStrictEqual({
+      name: 'bundle', mountPath: '/usr/share/nginx/html', readOnly: true
+    });
     expect(podSpec.volumes[0].persistentVolumeClaim.claimName).toBe('multi-idp-ui');
+  });
+
+  // Without subPath the ConfigMap mount shadows the whole of conf.d.
+  it('replaces only default.conf, from the nginx ConfigMap', () => {
+    expect(podSpec.containers[0].volumeMounts[1]).toStrictEqual({
+      name: 'nginx-config', mountPath: NGINX_CONFIG_PATH, subPath: 'default.conf', readOnly: true
+    });
+    expect(podSpec.volumes[1].configMap.name).toBe(uiNginxConfigName(spec));
+  });
+});
+
+describe('uiNginxConfigManifest', () => {
+  const cm = uiNginxConfigManifest(spec).body;
+  const config = cm.data['default.conf'];
+
+  // Fonts are fetched in CORS mode whatever the markup says, so a bundle shared
+  // with a Rancher on another origin renders in fallback fonts without this.
+  it('allows any origin, on error responses too', () => {
+    expect(config).toContain('add_header Access-Control-Allow-Origin "*" always;');
+  });
+
+  it('serves the bundle from the same root the PVC is mounted at', () => {
+    expect(config).toContain('root /usr/share/nginx/html;');
+  });
+
+  it('is named for the environment and carries the ui role', () => {
+    expect(cm.metadata.name).toBe('multi-idp-ui-nginx');
+    expect(cm.metadata.labels[LABEL_NAME]).toBe('multi-idp');
+  });
+});
+
+describe('sharedDashboardIndexUrl', () => {
+  // The in-cluster address is unreachable from a developer's own Rancher; this
+  // one goes through the ingress, which already routes the bundle path.
+  it('addresses the index publicly, unlike the in-cluster one', () => {
+    expect(sharedDashboardIndexUrl(spec)).toBe(`https://${ spec.hostname }/${ UI_BUNDLE_PATH }/index.html`);
+    expect(dashboardIndexUrl(spec)).toContain('svc.cluster.local');
+  });
+
+  it('carries the entry port when there is one', () => {
+    expect(sharedDashboardIndexUrl({ ...spec, entryPort: 8443 })).toBe(
+      `https://${ spec.hostname }:8443/${ UI_BUNDLE_PATH }/index.html`
+    );
   });
 });
 
@@ -306,6 +348,7 @@ describe('allManifests', () => {
     expect(at('Secret', 'multi-idp-bootstrap')).toBeLessThan(at('Deployment', 'multi-idp'));
     expect(at('PersistentVolumeClaim', 'multi-idp-ui')).toBeLessThan(at('Job', 'multi-idp-build-1'));
     expect(at('PersistentVolumeClaim', 'multi-idp-data')).toBeLessThan(at('Deployment', 'multi-idp'));
+    expect(at('ConfigMap', 'multi-idp-ui-nginx')).toBeLessThan(at('Deployment', 'multi-idp-ui'));
   });
 
   it('stores the spec on the record so the list can round-trip it', () => {

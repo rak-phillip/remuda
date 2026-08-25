@@ -131,6 +131,19 @@ remuda:
     incomplete: >-
       This environment was recorded but never finished being created, so nothing
       is running for it. Delete it and create it again.
+    share: Use this build elsewhere
+    shareIndex: ui-dashboard-index
+    shareHint: >-
+      Point another Rancher's ui-dashboard-index setting at this URL to run it
+      against this branch build, the way a *-dev bundle on the CDN would be used.
+      It serves whatever this environment's most recent successful build
+      produced, and it stops answering when the environment is stopped or
+      deleted.
+    shareUntrusted: >-
+      This environment has no certificate issuer, so it is served with a
+      self-signed certificate. A Rancher on another host fetches this index
+      server-side and will reject that certificate. Recreate the environment
+      against a cluster issuer to share the build off this host.
     networking: Networking
     hopRoute: Route
     hopAddressType: Address type

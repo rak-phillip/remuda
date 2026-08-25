@@ -14,7 +14,7 @@ import {
 import { ingressEntry } from '../utils/discovery';
 import { hopHasDrifted } from '../utils/hop';
 import { isIncomplete, runStateOf } from '../utils/status';
-import { environmentUrl, resourceBase } from '../utils/manifests';
+import { environmentUrl, resourceBase, sharedDashboardIndexUrl } from '../utils/manifests';
 import {
   BLANK_CLUSTER, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME, PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
 } from '../utils/constants';
@@ -48,6 +48,12 @@ let timer: any = null;
 
 const url = computed(() => (spec.value ? environmentUrl(spec.value) : ''));
 const assetBase = computed(() => (spec.value ? resourceBase(spec.value) : ''));
+const indexUrl = computed(() => (spec.value ? sharedDashboardIndexUrl(spec.value) : ''));
+// A Rancher elsewhere fetches this index server-side and verifies the certificate
+// like any other client. Without an issuer the ingress has no TLS block and
+// traefik answers with its own self-signed default, which that fetch rejects --
+// so the URL is still worth showing, but it will not work off this host as-is.
+const indexTrusted = computed(() => !!spec.value?.clusterIssuer);
 
 const latestJob = computed(() => [...jobs.value]
   .sort((a, b) => (b.metadata?.creationTimestamp || '').localeCompare(a.metadata?.creationTimestamp || ''))[0]);
@@ -352,6 +358,31 @@ onUnmounted(() => clearInterval(timer));
           >{{ i18n.t('remuda.detail.peek') }}</a>
         </dd>
       </dl>
+
+      <template v-if="!incomplete">
+        <h3>{{ i18n.t('remuda.detail.share') }}</h3>
+        <Banner
+          color="info"
+          :label="i18n.t('remuda.detail.shareHint')"
+        />
+        <Banner
+          v-if="!indexTrusted"
+          color="warning"
+          :label="i18n.t('remuda.detail.shareUntrusted')"
+        />
+        <dl class="remuda-facts">
+          <dt>{{ i18n.t('remuda.detail.shareIndex') }}</dt>
+          <dd>
+            <code>{{ indexUrl }}</code>
+            <button
+              class="btn btn-sm role-link"
+              @click="copy(indexUrl)"
+            >
+              Copy
+            </button>
+          </dd>
+        </dl>
+      </template>
 
       <template v-if="hop">
         <h3>{{ i18n.t('remuda.detail.networking') }}</h3>

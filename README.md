@@ -22,7 +22,8 @@ URL and a bootstrap password.
    `RESOURCE_BASE=https://<host>/ui-bundle`. Asset URLs are absolute and baked in at build time, so
    the serving location has to be decided before the build runs.
 2. nginx serves the result at `https://<host>/ui-bundle/`, on the same ingress and certificate as
-   the backend — same origin, so no CORS.
+   the backend — same origin, so the environment's own backend needs no CORS. The bundle server
+   sends `Access-Control-Allow-Origin: *` anyway, for the case below.
 3. The Rancher backend runs with `CATTLE_UI_DASHBOARD_INDEX` and `CATTLE_UI_OFFLINE_PREFERRED=false`.
    Every Rancher setting can be overridden by a `CATTLE_<NAME>` env var, so no post-deploy API calls
    or authentication into the dev instance are needed.
@@ -34,6 +35,38 @@ back to its embedded UI for the life of the process — and the bundle is built 
 The index is fetched **server-side** by the Rancher pod, so it points at the in-cluster Service.
 The assets are fetched by the **browser**, so they point at the public host. Each URL is only used
 where it is reachable.
+
+## Using a build from another Rancher
+
+A backend developer working on a feature often needs their own local Rancher running against an
+in-progress UI build. Today that means waiting for a `*-dev` bundle on `releases.rancher.com`,
+which a fork branch never gets (see above). An environment's bundle can be used the same way:
+point the other Rancher's `ui-dashboard-index` at the URL shown under **Use this build elsewhere**
+on the environment's detail page, which is `https://<host>/ui-bundle/index.html`.
+
+That address is the public one, not the in-cluster Service — the fetch is still server-side, but
+from wherever that Rancher happens to be running. The ingress already routes the bundle path, so
+nothing new is exposed.
+
+The one thing that had to change is CORS. `RESOURCE_BASE` is absolute, so the borrowing Rancher
+serves `index.html` from its own origin while the browser keeps loading assets from here. Most of
+the bundle survives that untouched — the entry points are plain `<script defer src>` with no
+`type="module"` and no `crossorigin`, and webpack's chunk and stylesheet injection is the same,
+none of which is CORS-checked. `@font-face` is the exception, because fonts are always fetched in
+CORS mode: without the header the dashboard loads and works but falls back to system fonts, which
+is a bad result for a tool meant for looking at UI changes. `releases.rancher.com` serves the
+`*-dev` bundles with `Access-Control-Allow-Origin: *`; this is parity with it.
+
+Two caveats, both surfaced on the detail page:
+
+- The environment needs a real certificate. Without a cluster issuer the ingress has no TLS block
+  and traefik answers with its self-signed default, which the borrowing Rancher rejects when it
+  fetches the index.
+- The bundle is as durable as the environment. Stopping or deleting it takes the bundle with it —
+  the same bargain as a CDN `*-dev` bundle that gets overwritten or pruned.
+
+Environments created before this existed have neither the ConfigMap nor the mount, so they serve
+the bundle without the header. Recreate them to share their builds.
 
 ## Running Rancher inside Kubernetes
 

@@ -1,7 +1,7 @@
 import {
   REMUDA_NS, ENDPOINTS, INOTIFY_LIMITS, K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER,
   LABEL_ROLE, ROLE_BACKEND, ROLE_BUILD, ROLE_UI, UI_BUNDLE_PATH, BUILD_IMAGE, SERVE_IMAGE,
-  REMUDA_ISSUER_NAME, REMUDA_ISSUER_ACCOUNT_SECRET,
+  REMUDA_ISSUER_NAME, REMUDA_ISSUER_ACCOUNT_SECRET, NGINX_CONFIG_PATH,
 } from './constants';
 import type { IssuerKind, RemudaSpec, ManifestRequest } from '../types';
 
@@ -15,9 +15,13 @@ export const labelsFor = (spec: RemudaSpec, role?: string): Record<string, strin
 /**
  * Browser-facing authority, carrying the entry port when there is one.
  *
- * Shared by both browser-facing URLs below so they cannot disagree: they are
- * the same origin by design -- that is what keeps the bundle free of CORS -- and
- * a port on one but not the other would break exactly that.
+ * Shared by both browser-facing URLs below so they cannot disagree: the
+ * environment's own backend and its bundle are the same origin by design, and a
+ * port on one but not the other would break exactly that.
+ *
+ * That sameness is what keeps the environment itself free of CORS. It stops
+ * holding as soon as the bundle is shared with a Rancher elsewhere, which is
+ * why the bundle server sends a CORS header anyway -- see uiNginxConfigManifest.
  */
 const browserOrigin = (spec: RemudaSpec): string => `https://${ spec.hostname }${ spec.entryPort ? `:${ spec.entryPort }` : '' }`;
 
@@ -29,6 +33,19 @@ export const resourceBase = (spec: RemudaSpec): string => `${ browserOrigin(spec
  * in-cluster over plain HTTP and never depends on hairpinning through the ingress.
  */
 export const dashboardIndexUrl = (spec: RemudaSpec): string => `http://${ spec.name }-ui.${ spec.namespace }.svc.cluster.local/${ UI_BUNDLE_PATH }/index.html`;
+
+/**
+ * The same index, addressed the way a Rancher *outside* this cluster has to
+ * reach it -- a backend developer's local instance, pointing its own
+ * ui-dashboard-index at a branch build rather than at a `*-dev` CDN bundle.
+ *
+ * Public rather than in-cluster, because that Rancher fetches the index
+ * server-side from wherever it happens to be running, and the ingress already
+ * routes `/UI_BUNDLE_PATH` to the bundle. Their browser then loads the assets
+ * from this origin too, since RESOURCE_BASE is absolute and baked in -- which is
+ * what uiNginxConfigManifest's CORS header is for.
+ */
+export const sharedDashboardIndexUrl = (spec: RemudaSpec): string => `${ browserOrigin(spec) }/${ UI_BUNDLE_PATH }/index.html`;
 
 export const environmentUrl = (spec: RemudaSpec): string => browserOrigin(spec);
 
@@ -279,6 +296,61 @@ export function backendDeploymentManifest(spec: RemudaSpec): ManifestRequest {
   };
 }
 
+/** Name of the ConfigMap carrying the bundle server's nginx config. */
+export const uiNginxConfigName = (spec: RemudaSpec): string => `${ spec.name }-ui-nginx`;
+
+/**
+ * Server block for the bundle, replacing the image's stock default.conf.
+ *
+ * It exists for one directive. The environment's own backend is same-origin
+ * with the bundle and needs nothing, but a Rancher elsewhere -- a backend
+ * developer's local instance pointed at this environment's index -- serves
+ * `index.html` from its own origin while the browser still fetches the assets
+ * from here, because RESOURCE_BASE is absolute and fixed at build time.
+ *
+ * Most of that survives cross-origin untouched: the bundle's entry points are
+ * plain `<script defer src>` with no `type="module"` and no `crossorigin`, and
+ * webpack's chunk and stylesheet injection is the same, none of which is
+ * CORS-checked. `@font-face` is the exception -- fonts are always fetched in
+ * CORS mode -- so without this header the dashboard loads and works but falls
+ * back to system fonts, which is a poor result for a tool whose whole point is
+ * looking at UI changes. `releases.rancher.com` serves the `*-dev` bundles with
+ * exactly this header; this is parity with it.
+ *
+ * Wildcard is safe here: the ingress routes only UI_BUNDLE_PATH to this server,
+ * so it covers static assets and never Rancher's API, and `*` cannot be paired
+ * with credentials by definition.
+ */
+export function uiNginxConfigManifest(spec: RemudaSpec): ManifestRequest {
+  const config = [
+    'server {',
+    '    listen 80;',
+    '    server_name _;',
+    '    root /usr/share/nginx/html;',
+    '    index index.html;',
+    '',
+    '    # `always` so the header is on error responses too -- a 404 for a font',
+    '    # should surface as a 404 in the console, not as an opaque CORS failure.',
+    '    add_header Access-Control-Allow-Origin "*" always;',
+    '',
+    '    location / {',
+    '        try_files $uri $uri/ =404;',
+    '    }',
+    '}',
+    '',
+  ].join('\n');
+
+  return {
+    endpoint: ENDPOINTS.configmap,
+    body:     {
+      apiVersion: 'v1',
+      kind:       'ConfigMap',
+      metadata:   meta(spec, uiNginxConfigName(spec), ROLE_UI),
+      data:       { 'default.conf': config },
+    },
+  };
+}
+
 export function uiDeploymentManifest(spec: RemudaSpec): ManifestRequest {
   const selector = { [LABEL_NAME]: spec.name, [LABEL_ROLE]: ROLE_UI };
 
@@ -301,18 +373,31 @@ export function uiDeploymentManifest(spec: RemudaSpec): ManifestRequest {
               ports:        [{ containerPort: 80, name: 'http' }],
               // Building into a directory named for the path means /ui-bundle/...
               // resolves straight off nginx's root with no rewrite rule.
-              volumeMounts: [{
-                name: 'bundle', mountPath: '/usr/share/nginx/html', readOnly: true
-              }],
+              volumeMounts: [
+                {
+                  name: 'bundle', mountPath: '/usr/share/nginx/html', readOnly: true
+                },
+                // subPath so the ConfigMap replaces just default.conf rather than
+                // shadowing conf.d and taking the rest of the directory with it.
+                {
+                  name: 'nginx-config', mountPath: NGINX_CONFIG_PATH, subPath: 'default.conf', readOnly: true
+                },
+              ],
               resources: {
                 requests: { cpu: '10m', memory: '32Mi' },
                 limits:   { cpu: '500m', memory: '256Mi' },
               },
             }],
-            volumes: [{
-              name:                  'bundle',
-              persistentVolumeClaim: { claimName: `${ spec.name }-ui`, readOnly: true },
-            }],
+            volumes: [
+              {
+                name:                  'bundle',
+                persistentVolumeClaim: { claimName: `${ spec.name }-ui`, readOnly: true },
+              },
+              {
+                name:      'nginx-config',
+                configMap: { name: uiNginxConfigName(spec) },
+              },
+            ],
           },
         },
       },
@@ -550,6 +635,7 @@ export function allManifests(spec: RemudaSpec, password: string, buildId: string
     recordManifest(spec),
     bootstrapSecretManifest(spec, password),
     k3sConfigManifest(spec),
+    uiNginxConfigManifest(spec),
     dataPvcManifest(spec),
     uiPvcManifest(spec),
     cachePvcManifest(spec),
