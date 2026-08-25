@@ -3,7 +3,7 @@ import {
   issuerAnnotations, issuerManifest,
   dashboardIndexUrl, dataPvcManifest, ingressManifest, inotifyInitContainer, k3sConfigManifest,
   environmentUrl, k3sConfigName, labelsFor, resourceBase, uiDeploymentManifest,
-  sharedDashboardIndexUrl, uiNginxConfigManifest, uiNginxConfigName,
+  sharedDashboardIndexUrl, uiNginxConfigManifest, uiNginxConfigName, dnsProbeJobManifest,
 } from '../manifests';
 import {
   K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER, NGINX_CONFIG_PATH, UI_BUNDLE_PATH,
@@ -541,5 +541,35 @@ describe('allManifests issuer ordering', () => {
     expect(endpoints({
       ...spec, clusterIssuer: undefined, acme: undefined
     } as any)).not.toContain('cert-manager.io.issuers');
+  });
+});
+
+
+describe('dnsProbeJobManifest', () => {
+  const job = dnsProbeJobManifest('example.com', 'pabc1234').body;
+  const podSpec = job.spec.template.spec;
+
+  // The base domain's own record always resolves; only an invented label says
+  // whether a wildcard is there.
+  it('probes a name under the domain rather than the domain itself', () => {
+    expect(podSpec.containers[0].command).toStrictEqual(['getent', 'hosts', 'pabc1234.example.com']);
+  });
+
+  // NXDOMAIN is the answer, not a flake, so a retry would only delay it.
+  it('does not retry, so one failure is the verdict', () => {
+    expect(job.spec.backoffLimit).toBe(0);
+    expect(podSpec.restartPolicy).toBe('Never');
+  });
+
+  it('cleans itself up even if nobody is left to delete it', () => {
+    expect(job.spec.ttlSecondsAfterFinished).toBeGreaterThan(0);
+    expect(job.spec.activeDeadlineSeconds).toBeGreaterThan(0);
+  });
+
+  // It belongs to the cluster, not to any environment, so an environment delete
+  // must never sweep it up by name.
+  it('carries no environment labels', () => {
+    expect(job.metadata.labels[LABEL_NAME]).toBeUndefined();
+    expect(job.metadata.labels[LABEL_MANAGED]).toBe('true');
   });
 });

@@ -16,7 +16,7 @@ import { useText } from '../utils/i18n';
 import { createEnvironment, hostnameTaken, installLocalPathStorage, readyClusters } from '../utils/api';
 import {
   backendImageForBranch, discoverDefaults, exposureFor, hostIngressDefaults, hostnameFor, ingressEntry,
-  isIpLiteral, saveDefaults, wildcardDomainFor,
+  isIpLiteral, isWildcardFallbackDomain, saveDefaults, wildcardDomainFor, wildcardResolves,
 } from '../utils/discovery';
 import { isCloneableRepo } from '../utils/validate';
 import { createBranchField } from '../utils/branch-field';
@@ -103,6 +103,11 @@ let repoTimer: any = null;
 let branchTimer: any = null;
 
 const baseDomain = ref('');
+// Whether the probe reached a verdict at all, and what it was. Both false while
+// it is inconclusive, which is the state that must not produce a banner.
+const wildcardChecked = ref(false);
+const wildcardMissing = ref(false);
+const derivedBaseDomain = ref('');
 const serverVersion = ref('');
 const ingressClass = ref('');
 const storageClass = ref('');
@@ -322,6 +327,79 @@ async function readDefaults() {
   }
 
   await loadTargetExposure(defaults.ingressClass);
+  await applyWildcardFallback(defaults.derivedBaseDomain);
+}
+
+/**
+ * Check that the base domain can actually carry a subdomain, and fall back if
+ * it cannot.
+ *
+ * The default comes from server-url, on the assumption that a wildcard record
+ * was created under the host Rancher's own domain. When that holds -- the
+ * shared team instances -- everything works with no DNS of ours involved, and
+ * this changes nothing. When it does not, the Rancher's own name resolves while
+ * every name beneath it is NXDOMAIN, so the form looks correct right up until
+ * the environment is unreachable, its certificate never issues, and the ACME
+ * self-check is the only thing that says why. Probing turns that into a
+ * decision made before the build runs.
+ *
+ * Only ever applied to a domain this extension guessed. A domain the team typed
+ * is left alone even if it fails to resolve: they may be about to create the
+ * record, and silently rewriting what someone deliberately entered is worse than
+ * letting them find out. A previous sslip.io fallback *is* re-probed, so a
+ * cluster that later gains its wildcard goes back to using it.
+ */
+async function applyWildcardFallback(derived: string) {
+  // `direct` is served by the *target* cluster's own ingress, and
+  // loadTargetExposure has already named the environment after it. The host's
+  // domain is not the serving one there, so probing it would answer a question
+  // nobody asked -- and applying it would point the hostname at a cluster that
+  // cannot reach the environment.
+  if (usesDirect.value) {
+    return;
+  }
+
+  const ours = !baseDomain.value ||
+    baseDomain.value === derived ||
+    isWildcardFallbackDomain(baseDomain.value);
+
+  if (!ours || !derived || isIpLiteral(derived)) {
+    return;
+  }
+
+  wildcardChecked.value = false;
+  derivedBaseDomain.value = derived;
+
+  const resolves = await wildcardResolves(store, HOST_CLUSTER_ID, derived);
+
+  // Inconclusive: no verdict is not a failing verdict, so nothing moves.
+  if (resolves === undefined) {
+    return;
+  }
+
+  wildcardChecked.value = true;
+
+  if (resolves) {
+    baseDomain.value = derived;
+    wildcardMissing.value = false;
+
+    return;
+  }
+
+  // The ingress that will answer for the environment is the host's in every
+  // mode that uses this domain -- `local` is on the host cluster, and `hop`
+  // terminates there -- so that is the address to name it after.
+  const entry = await ingressEntry(store, HOST_CLUSTER_ID, hostIngressClass.value || ingressClass.value);
+  const fallback = wildcardDomainFor(entry?.addresses?.[0] || '');
+
+  // Empty when the host ingress publishes a hostname rather than an address.
+  // That name has no wildcard of ours to offer either, so the field is left
+  // asking rather than filled with something that resolves nowhere.
+  wildcardMissing.value = true;
+
+  if (fallback) {
+    baseDomain.value = fallback;
+  }
 }
 
 /**
@@ -706,6 +784,11 @@ onMounted(async() => {
       v-else-if="baseDomainUnresolvable"
       color="warning"
       :label="i18n.t('remuda.warning.baseDomainIsIp', { baseDomain })"
+    />
+    <Banner
+      v-if="wildcardChecked && wildcardMissing"
+      color="info"
+      :label="i18n.t('remuda.warning.wildcardMissing', { derived: derivedBaseDomain, baseDomain })"
     />
 
     <div class="row mb-20">

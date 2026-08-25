@@ -1,9 +1,10 @@
 import {
   CONFIG_MAP_NAME, DEFAULT_BACKEND_IMAGE, DEFAULT_NESTED_POD_CIDR, DEFAULT_NESTED_SERVICE_CIDR,
   REMUDA_NS, ENDPOINTS, HOST_CLUSTER_ID, NESTED_CIDR_CANDIDATES, REMUDA_ISSUER_NAME,
-  WILDCARD_DNS_SUFFIX,
+  WILDCARD_DNS_SUFFIX, DNS_PROBE_TIMEOUT_MS,
 } from './constants';
-import { create, list } from './api';
+import { create, ensureNamespace, list, remove } from './api';
+import { dnsProbeJobManifest } from './manifests';
 import { hopSupported } from './hop';
 import type {
   AcmeIssuer, ClusterDefaults, DirectReason, Exposure, IngressEntry, IssuerKind,
@@ -47,6 +48,67 @@ export function isIpLiteral(domain: string): boolean {
  */
 export function wildcardDomainFor(address: string): string {
   return isIpLiteral(address) ? `${ address }.${ WILDCARD_DNS_SUFFIX }` : '';
+}
+
+/** Whether a base domain is one this extension derived from an address. */
+export const isWildcardFallbackDomain = (domain: string): boolean => (domain || '').endsWith(`.${ WILDCARD_DNS_SUFFIX }`);
+
+/**
+ * Whether `*.<baseDomain>` resolves, from inside the cluster that will serve it.
+ *
+ * Three-valued on purpose. `true` and `false` are the probe's verdict;
+ * `undefined` means it never reached one -- no permission to create the Job, no
+ * node to schedule it, an image it could not pull, or the caller gave up
+ * waiting. That distinction is the whole point: an inconclusive probe must leave
+ * the base domain alone. Rewriting a working domain to sslip.io because a Job
+ * could not be scheduled would break a cluster that was fine, which is a worse
+ * failure than the one this exists to catch.
+ */
+export async function wildcardResolves(
+  store: any, clusterId: string, baseDomain: string, timeoutMs = DNS_PROBE_TIMEOUT_MS
+): Promise<boolean | undefined> {
+  if (!baseDomain || isIpLiteral(baseDomain)) {
+    return undefined;
+  }
+
+  // Lowercase: a DNS label is case-insensitive, but a Kubernetes object name is
+  // not allowed uppercase at all, and this string is both.
+  const probeId = `p${ Math.random().toString(36).slice(2, 10) }`.toLowerCase();
+  const manifest = dnsProbeJobManifest(baseDomain, probeId);
+  const name = manifest.body.metadata.name;
+
+  try {
+    await ensureNamespace(store, clusterId);
+    await create(store, clusterId, manifest);
+  } catch {
+    return undefined;
+  }
+
+  try {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const job = await store.dispatch('management/request', { url: `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.job }/${ REMUDA_NS }/${ name }` }).catch(() => undefined);
+
+      // Both are counts, and backoffLimit is 0, so the first one to appear is
+      // the verdict: exit 0 from getent means the name resolved.
+      if (job?.status?.succeeded) {
+        return true;
+      }
+
+      if (job?.status?.failed) {
+        return false;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    return undefined;
+  } finally {
+    // ttlSecondsAfterFinished would get there eventually; this keeps the
+    // namespace tidy for the common case where the answer arrived.
+    remove(store, clusterId, ENDPOINTS.job, REMUDA_NS, name).catch(() => undefined);
+  }
 }
 
 /**
@@ -521,17 +583,20 @@ export async function discoverDefaults(store: any, clusterId: string): Promise<C
   ]);
 
   return {
-    baseDomain:      baseDomainFromServerUrl(url),
-    serverVersion:   version,
+    baseDomain:        baseDomainFromServerUrl(url),
+    serverVersion:     version,
     ingressClass,
-    storageClass:    storage.preferred,
+    storageClass:      storage.preferred,
     ...issuer,
     ...nested,
     ...saved,
+    // After `saved` for the same reason as hasStorageClass below: both describe
+    // the cluster as it is now, and neither is the user's to override.
+    derivedBaseDomain: baseDomainFromServerUrl(url),
     // After `saved` on purpose: this describes the cluster as it is right now,
     // and a stale persisted value must never mask a cluster that has since lost
     // its storage.
-    hasStorageClass: storage.found,
+    hasStorageClass:   storage.found,
   };
 }
 

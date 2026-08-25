@@ -45,6 +45,8 @@ export const LABEL_ENTRY_PORT = 'remuda.rancher.io/entry-port';
 export const ROLE_BACKEND = 'backend';
 export const ROLE_UI = 'ui';
 export const ROLE_BUILD = 'build';
+/** Not an environment's -- the DNS probe belongs to a cluster, not a workload. */
+export const ROLE_PROBE = 'probe';
 export const ROLE_HOP = 'hop';
 
 /**
@@ -80,6 +82,19 @@ export const UI_BUNDLE_PATH = 'ui-bundle';
 
 export const BUILD_IMAGE = 'node:24';
 export const SERVE_IMAGE = 'nginx:alpine';
+
+/**
+ * Image the wildcard DNS probe runs in. Deliberately the same one the bundle is
+ * served from: any cluster that has ever run an environment already has it, so
+ * the probe usually costs a scheduling round-trip and no pull. Its busybox
+ * `getent` exits 0 on a name that resolves and 2 on NXDOMAIN, which is the whole
+ * result -- so the Job's own success or failure carries it and nothing has to
+ * read logs back.
+ */
+export const DNS_PROBE_IMAGE = SERVE_IMAGE;
+
+/** How long to wait for the probe Job to land a verdict before giving up on it. */
+export const DNS_PROBE_TIMEOUT_MS = 25000;
 
 /** Where nginx's stock nginx.conf includes server blocks from. */
 export const NGINX_CONFIG_PATH = '/etc/nginx/conf.d/default.conf';

@@ -149,6 +149,13 @@ export interface RemudaSpec {
 /** Per-cluster defaults, discovered then persisted so later creates prefill. */
 export interface ClusterDefaults {
   baseDomain: string;
+  /**
+   * The base domain as derived from server-url, before any saved override was
+   * merged over it. Kept separate so the form can tell a domain the team typed
+   * -- which it must never touch -- from the one this extension guessed, which
+   * is the only one worth probing for a wildcard.
+   */
+  derivedBaseDomain: string;
   /** Host Rancher's server-version, used to tell the main line from a branched one. */
   serverVersion?: string;
   ingressClass: string;

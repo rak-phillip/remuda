@@ -1,7 +1,7 @@
 import {
   backendImageForBranch, baseDomainFromServerUrl, cidrsOverlap, discoverDefaults, exposureFor,
   hostIngressDefaults, hostnameFor, ingressEntry, isIpLiteral, pickNestedCidrs, saveDefaults,
-  widenToSixteen, wildcardDomainFor,
+  widenToSixteen, wildcardDomainFor, isWildcardFallbackDomain, wildcardResolves,
 } from '../discovery';
 import { DEFAULT_BACKEND_IMAGE, ENDPOINTS } from '../constants';
 
@@ -522,5 +522,96 @@ describe('ingressEntry', () => {
     };
 
     expect(await ingressEntry(store, 'c-m-x', 'traefik')).toBeUndefined();
+  });
+});
+
+
+describe('isWildcardFallbackDomain', () => {
+  it.each([
+    ['34.220.244.75.sslip.io', true],
+    ['prak-2531067c.ui.rancher.space', false],
+    ['', false],
+  ])('%s -> %s', (domain, expected) => {
+    expect(isWildcardFallbackDomain(domain as string)).toBe(expected);
+  });
+});
+
+describe('wildcardResolves', () => {
+  /**
+   * `status` is what the polled Job reports back. `undefined` stands for a Job
+   * that never reaches a verdict, which is the case the caller must not read as
+   * a failure.
+   */
+  function mockStore(status: any, { createFails = false } = {}) {
+    const urls: string[] = [];
+    const methods: string[] = [];
+
+    const store = {
+      dispatch: jest.fn(async(_action: string, opts: any) => {
+        urls.push(opts.url);
+        methods.push(opts.method || 'GET');
+
+        if (opts.method === 'POST') {
+          if (createFails) {
+            throw new Error('forbidden');
+          }
+
+          return {};
+        }
+
+        if (opts.method === 'DELETE') {
+          return {};
+        }
+
+        // Namespace and Job reads both land here; only the Job's shape matters.
+        return { status };
+      }),
+    };
+
+    return {
+      store, urls, methods
+    };
+  }
+
+  it('reads a succeeded probe as the wildcard resolving', async() => {
+    const { store } = mockStore({ succeeded: 1 });
+
+    expect(await wildcardResolves(store, 'local', 'example.com')).toBe(true);
+  });
+
+  // getent exits non-zero on NXDOMAIN and backoffLimit is 0, so one failure is
+  // the answer rather than something to retry.
+  it('reads a failed probe as the wildcard missing', async() => {
+    const { store } = mockStore({ failed: 1 });
+
+    expect(await wildcardResolves(store, 'local', 'example.com')).toBe(false);
+  });
+
+  // The distinction that keeps a working cluster from being rewritten to sslip.
+  it('is undefined when the probe cannot be created at all', async() => {
+    const { store } = mockStore({ succeeded: 1 }, { createFails: true });
+
+    expect(await wildcardResolves(store, 'local', 'example.com')).toBeUndefined();
+  });
+
+  it('is undefined when the probe never reaches a verdict before the deadline', async() => {
+    const { store } = mockStore({});
+
+    expect(await wildcardResolves(store, 'local', 'example.com', 0)).toBeUndefined();
+  });
+
+  it('does not probe a base domain that is an address, since nothing can hang under one', async() => {
+    const { store } = mockStore({ succeeded: 1 });
+
+    expect(await wildcardResolves(store, 'local', '13.53.41.140')).toBeUndefined();
+    expect(store.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('cleans the probe up once it has answered', async() => {
+    const { store, methods } = mockStore({ succeeded: 1 });
+
+    await wildcardResolves(store, 'local', 'example.com');
+
+    expect(methods).toContain('DELETE');
   });
 });

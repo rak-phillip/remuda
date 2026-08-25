@@ -1,7 +1,8 @@
 import {
   REMUDA_NS, ENDPOINTS, INOTIFY_LIMITS, K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER,
   LABEL_ROLE, ROLE_BACKEND, ROLE_BUILD, ROLE_UI, UI_BUNDLE_PATH, BUILD_IMAGE, SERVE_IMAGE,
-  REMUDA_ISSUER_NAME, REMUDA_ISSUER_ACCOUNT_SECRET, NGINX_CONFIG_PATH,
+  REMUDA_ISSUER_NAME, REMUDA_ISSUER_ACCOUNT_SECRET, NGINX_CONFIG_PATH, ROLE_PROBE,
+  DNS_PROBE_IMAGE,
 } from './constants';
 import type { IssuerKind, RemudaSpec, ManifestRequest } from '../types';
 
@@ -526,6 +527,60 @@ export function ingressManifest(spec: RemudaSpec): ManifestRequest {
         // 80. traefik would otherwise need a ServersTransport CRD to go upstream
         // over HTTPS, which is why the backend runs with --no-cacerts.
         ...(spec.clusterIssuer ? { tls: [{ hosts: [spec.hostname], secretName: `${ spec.name }-tls` }] } : {}),
+      },
+    },
+  };
+}
+
+/**
+ * A Job that asks whether a name under the base domain resolves.
+ *
+ * The question is whether `*.<baseDomain>` exists, so the name probed is a
+ * random one: a wildcard answers for any label, while a domain carrying only
+ * specific records answers for none of the ones we would invent. Without this
+ * the check would pass on the base domain's own A record and prove nothing --
+ * which is exactly the case that fails, since a Rancher's own hostname always
+ * resolves whether or not anything is hung beneath it.
+ *
+ * It runs in the cluster rather than the browser because that is the resolver
+ * whose answer matters: the same view cert-manager takes when it self-checks an
+ * HTTP-01 challenge, and the one that honours a private or split-horizon zone
+ * that a public resolver cannot see.
+ *
+ * `backoffLimit: 0` so NXDOMAIN is a verdict rather than something to retry, and
+ * `ttlSecondsAfterFinished` so an abandoned probe still cleans itself up if the
+ * form is closed before it can be deleted.
+ */
+export function dnsProbeJobManifest(baseDomain: string, probeId: string, namespace = REMUDA_NS): ManifestRequest {
+  const name = `remuda-dns-probe-${ probeId }`;
+
+  return {
+    endpoint: ENDPOINTS.job,
+    body:     {
+      apiVersion: 'batch/v1',
+      kind:       'Job',
+      metadata:   {
+        name, namespace, labels: { [LABEL_MANAGED]: 'true', [LABEL_ROLE]: ROLE_PROBE }
+      },
+      spec: {
+        backoffLimit:            0,
+        ttlSecondsAfterFinished: 120,
+        activeDeadlineSeconds:   20,
+        template:                {
+          metadata: { labels: { [LABEL_MANAGED]: 'true', [LABEL_ROLE]: ROLE_PROBE } },
+          spec:     {
+            restartPolicy: 'Never',
+            containers:    [{
+              name:      'probe',
+              image:     DNS_PROBE_IMAGE,
+              command:   ['getent', 'hosts', `${ probeId }.${ baseDomain }`],
+              resources: {
+                requests: { cpu: '10m', memory: '16Mi' },
+                limits:   { cpu: '100m', memory: '64Mi' },
+              },
+            }],
+          },
+        },
       },
     },
   };

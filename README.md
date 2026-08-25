@@ -128,15 +128,57 @@ actively wrong: the node's resolvers do not resolve `*.svc.cluster.local`, which
 ## Prerequisites
 
 **Wildcard DNS** for the base domain, pointing at the management cluster's ingress, is the only thing
-needed **once, on the management cluster** — the one serving this Rancher. The base domain is derived
-from the host Rancher's `server-url`, so for a Rancher at `https://example.ui.rancher.space` add
+worth setting up **once, on the management cluster** — the one serving this Rancher. The base domain is
+derived from the host Rancher's `server-url`, so for a Rancher at `https://example.ui.rancher.space` add
 `*.example.ui.rancher.space`. A downstream cluster needs no DNS record of its own; see
 [Downstream clusters](#downstream-clusters).
+
+It is not required. Without it Remuda falls back to sslip.io and still works — see
+[When the wildcard is not there](#when-the-wildcard-is-not-there) — but with it, environments are named
+under a domain the team controls and nothing depends on a third party.
 
 A management cluster that cannot do this — one reached by IP, or a Rancher running in Docker, whose
 k3s has no ingress controller at all — is not out of luck. Environments on a **downstream** cluster
 fall back to being reached directly there; see [Direct exposure](#direct-exposure-the-fallback). Only
 an environment targeting `local` genuinely needs the management cluster to be able to serve it.
+
+### When the wildcard is not there
+
+A Rancher's own hostname always resolves, whether or not anything is hung beneath it. That made the
+missing-wildcard case unusually nasty: the create form looked entirely correct, the build ran, and the
+first sign of trouble was an environment that would not load and a certificate stuck on
+
+```
+Waiting for HTTP-01 challenge propagation: failed to perform self check GET
+'http://<name>.<base-domain>/.well-known/acme-challenge/...'
+```
+
+because Let's Encrypt could not resolve the name either.
+
+So the base domain is now checked before anything is created. Remuda runs a short-lived Job on the
+management cluster that asks whether a **random** name under the base domain resolves — random because
+a wildcard answers for any label, while a domain carrying only specific records answers for none we
+would invent. Probing the base domain itself would pass on its own A record and prove nothing.
+
+The Job's own exit status is the whole result (`getent` exits 0 on a name that resolves, non-zero on
+NXDOMAIN), so nothing has to read logs back, and `backoffLimit: 0` keeps NXDOMAIN a verdict rather than
+something to retry. It runs in the cluster rather than the browser deliberately: that is the resolver
+whose answer matters — the same view cert-manager takes when it self-checks a challenge, and the one
+that honours a private or split-horizon zone a public resolver cannot see.
+
+What happens with the answer:
+
+- **Resolves** — the derived domain is used, exactly as before. Nothing of ours is involved.
+- **Does not resolve** — the base domain becomes `<ingress-address>.sslip.io`, which resolves to the
+  cluster's ingress with nothing to create and nothing to maintain. The form says so rather than
+  quietly changing the address.
+- **No verdict** — no permission to create the Job, nothing to schedule it, or it timed out. The base
+  domain is left alone. An inconclusive probe is not a failing one, and rewriting a working domain
+  because a Job could not be scheduled would break a cluster that was fine.
+
+Only a domain Remuda derived is ever rewritten. One typed by hand is left as it is even if it fails to
+resolve — the team may be about to create the record. A previous sslip.io fallback *is* re-probed, so a
+cluster that later gains its wildcard goes back to using it on the next create.
 
 ### TLS needs no setup
 
