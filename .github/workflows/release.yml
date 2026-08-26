@@ -29,6 +29,8 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       tagged_release: ${{ steps.v.outputs.tagged_release }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      pages_branch: ${{ steps.v.outputs.pages_branch }}
     steps:
       - uses: actions/checkout@v7
 
@@ -53,9 +55,34 @@ jobs:
           # The extension package name; what the Rancher scripts match against.
           name=$(jq -r .name pkg/remuda/package.json)
 
-          echo "version=$version"                  >> "$GITHUB_OUTPUT"
-          echo "tagged_release=${name}-${version}" >> "$GITHUB_OUTPUT"
-          echo "Releasing $version as ${name}-${version}"
+          # Which release train this tag belongs to.
+          #
+          # A SemVer pre-release suffix is the whole signal: v0.2.0-rc.1 is a
+          # candidate, v0.2.0 is production. They publish the same artifacts by
+          # the same jobs -- a candidate is a full release, not a partial one --
+          # and differ in exactly two places: which Helm repository they land in,
+          # and whether they are allowed to move the `latest` image tag.
+          #
+          # Relying on Helm hiding pre-releases from `helm search` was considered
+          # and rejected: it would put a candidate in the same index the
+          # Extensions screen reads, and whether *that* filters pre-releases is
+          # not something this repository gets to decide.
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+            pages_branch=gh-pages-rc
+          else
+            prerelease=false
+            pages_branch=gh-pages
+          fi
+
+          {
+            echo "version=$version"
+            echo "tagged_release=${name}-${version}"
+            echo "prerelease=$prerelease"
+            echo "pages_branch=$pages_branch"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Releasing $version as ${name}-${version} into ${pages_branch}"
 
   # The publish script does not propagate a failed extension build -- it packages
   # an empty bundle and reports success, so a release can look green while
@@ -104,7 +131,7 @@ jobs:
       contents: write
       pull-requests: write
     with:
-      target_branch: gh-pages
+      target_branch: ${{ needs.version.outputs.pages_branch }}
       tagged_release: ${{ needs.version.outputs.tagged_release }}
 
   # The air-gapped install path: Extensions -> Manage Extension Catalogs.
@@ -145,10 +172,14 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/remuda-controller
+          # type=semver already declines to emit {{major}}.{{minor}} for a
+          # pre-release. `latest` is raw and would move unconditionally, so it is
+          # gated by hand -- a release candidate must never become what an
+          # unpinned `helm install` pulls.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.version.outputs.prerelease == 'false' }}
 
       - uses: docker/build-push-action@v7
         with:
@@ -160,9 +191,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Adds the controller chart to the same Helm repository, so one Index URL
-  # serves both. Strictly after `charts`: both jobs push to gh-pages, and
-  # running them together would race.
+  # Adds the controller chart to the same Helm repository as the extension, so
+  # one Index URL serves both. Strictly after `charts`: both jobs push to the
+  # same branch, and running them together would race.
   controller-chart:
     name: Controller chart
     needs: [version, charts, controller-image]
@@ -176,7 +207,7 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          ref: gh-pages
+          ref: ${{ needs.version.outputs.pages_branch }}
           path: pages
           # Full history: the commit step rebases onto whatever the extension
           # job just pushed, and `git pull --rebase` cannot work on a shallow
@@ -219,5 +250,5 @@ jobs:
 
           # The extension job pushed to this branch moments ago, so rebase
           # rather than assume the checkout is still current.
-          git pull --rebase origin gh-pages
-          git push origin gh-pages
+          git pull --rebase origin "${{ needs.version.outputs.pages_branch }}"
+          git push origin "${{ needs.version.outputs.pages_branch }}"
