@@ -1,0 +1,349 @@
+# The scriptable surface: an Environment is what `kubectl apply` and a Steve
+# `curl` create, and what the extension will write instead of composing twelve
+# objects in the browser.
+#
+# Deliberately in templates/ rather than crds/. Helm installs crds/ once and
+# never upgrades it, which for a schema still at v1alpha1 means every field
+# added here would silently fail to reach an existing install -- and the failure
+# looks like the API server dropping the field, which is a bad afternoon. The
+# resource-policy annotation keeps the CRD (and every Environment under it) when
+# the release is uninstalled, which is the part crds/ was protecting.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: environments.remuda.rancher.io
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "remuda-controller.labels" . | nindent 4 }}
+spec:
+  group: remuda.rancher.io
+  scope: Namespaced
+  names:
+    kind: Environment
+    listKind: EnvironmentList
+    plural: environments
+    singular: environment
+    # Not `env`, which is close enough to a shell builtin and to other charts'
+    # shortnames to be worth avoiding.
+    shortNames:
+      - renv
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Branch
+          type: string
+          jsonPath: .spec.branch
+        - name: Cluster
+          type: string
+          jsonPath: .spec.clusterId
+        - name: Running
+          type: boolean
+          jsonPath: .spec.running
+        - name: Build
+          type: string
+          jsonPath: .status.build
+        - name: State
+          type: string
+          jsonPath: .status.run
+        - name: URL
+          type: string
+          jsonPath: .status.url
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: >-
+            A Rancher instance serving a dashboard branch. The object's name is
+            the environment's name: it prefixes every object created for it, and
+            it is the label the workload is found by.
+          properties:
+            spec:
+              type: object
+              required:
+                - repo
+                - branch
+              description: >-
+                What was asked for. Only repo and branch are required -- every
+                other field is either defaulted here or resolved by the
+                controller from the cluster, and what it resolved to is recorded
+                in status.resolved. Setting one of the resolvable fields pins it
+                and skips that piece of discovery.
+              properties:
+                repo:
+                  type: string
+                  description: Clone URL, e.g. https://github.com/rancher/dashboard
+                  minLength: 1
+                branch:
+                  type: string
+                  description: Branch to build and serve.
+                  minLength: 1
+                running:
+                  type: boolean
+                  default: true
+                  description: >-
+                    Start/stop. False scales the backend and bundle server to
+                    zero and leaves everything else -- volumes, hostname,
+                    bootstrap password -- in place, so the URL answers 503 until
+                    it is true again.
+                clusterId:
+                  type: string
+                  default: local
+                  description: >-
+                    Rancher cluster ID the workload runs on. Anything other than
+                    the host cluster is fronted from it, since the wildcard DNS
+                    only ever resolves there.
+                owner:
+                  type: string
+                  description: >-
+                    Who it belongs to, for display and for the
+                    remuda.rancher.io/owner label. The UI fills this from the
+                    logged-in user; a scripted create may leave it empty.
+                backendImage:
+                  type: string
+                  description: >-
+                    Rancher server image. Left empty the controller picks one
+                    from the branch and the host Rancher's version, which is
+                    right far more often than a pinned tag.
+                hostname:
+                  type: string
+                  description: >-
+                    Fully qualified host. Left empty the controller composes
+                    <name>.<base domain> from the cluster's recorded defaults.
+                entryPort:
+                  type: integer
+                  description: >-
+                    Port to reach hostname on when it is not 443. Only ever
+                    meaningful for a downstream environment the host cluster
+                    cannot front, where the target's ingress answers on a
+                    NodePort.
+                  minimum: 1
+                  maximum: 65535
+                hopPort:
+                  type: integer
+                  default: 443
+                  minimum: 1
+                  maximum: 65535
+                  description: >-
+                    Port the host cluster dials on the target cluster's nodes to
+                    reach its ingress. Only meaningful for a downstream
+                    environment. 443 covers a hostPort DaemonSet, which is what
+                    RKE2 and k3s both run; a target whose ingress sits behind a
+                    NodePort Service must pin the assigned port here. The
+                    controller reads node addresses out of management.cattle.io
+                    and has no way to see a downstream Service, so it cannot
+                    discover this -- the extension can, and writes it in.
+                gitSecretName:
+                  type: string
+                  description: >-
+                    Secret in this namespace holding a `token` key, for cloning
+                    a private fork.
+                dataSizeGb:
+                  type: integer
+                  default: 20
+                  minimum: 1
+                  description: Backend volume, which holds the nested cluster's state.
+                uiSizeGb:
+                  type: integer
+                  default: 2
+                  minimum: 1
+                  description: Volume the built bundle is served from.
+                cacheSizeGb:
+                  type: integer
+                  default: 8
+                  minimum: 1
+                  description: Volume the build's package cache lives on.
+                ingressClass:
+                  type: string
+                  description: Resolved from the target cluster when empty.
+                storageClass:
+                  type: string
+                  description: >-
+                    Resolved from the target cluster's default when empty. A
+                    cluster with no StorageClass at all needs one installed
+                    before an environment can run.
+                clusterIssuer:
+                  type: string
+                  description: cert-manager issuer for the environment's certificate.
+                issuerKind:
+                  type: string
+                  enum:
+                    - ClusterIssuer
+                    - Issuer
+                  description: >-
+                    Absent means ClusterIssuer. A stock Rancher provisions only a
+                    namespaced Issuer, so the common case is the controller
+                    mirroring that one into this namespace and setting Issuer.
+                acme:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: >-
+                    ACME spec to mirror onto the target cluster, copied verbatim
+                    from whatever issuer it already has. Only ever the cluster
+                    this environment's own objects are written to -- a downstream
+                    environment terminates TLS on the host instead, and carries
+                    nothing here.
+                nestedPodCidr:
+                  type: string
+                  description: >-
+                    Pod CIDR for the k3s running inside the backend pod. It must
+                    not overlap the host cluster's, or the nested cluster cannot
+                    reach its own CoreDNS. Left empty the controller reads the
+                    host's and picks a pair that clears it.
+                nestedServiceCidr:
+                  type: string
+                  description: Service CIDR for the nested k3s. See nestedPodCidr.
+            status:
+              type: object
+              description: What the controller actually did.
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                url:
+                  type: string
+                  description: Where the environment answers, once it does.
+                sharedBundleUrl:
+                  type: string
+                  description: >-
+                    The bundle's index, addressed the way a Rancher outside this
+                    cluster has to reach it. Point another instance's
+                    ui-dashboard-index here to borrow this build.
+                buildId:
+                  type: string
+                  description: >-
+                    Names the current build Job. Set on the first provision and
+                    changed only by a rebuild, so the rendered Job is stable
+                    across reconciles rather than moving with the clock.
+                build:
+                  type: string
+                  enum:
+                    - Unknown
+                    - Building
+                    - Ready
+                    - Failed
+                  description: State of the most recent build Job.
+                run:
+                  type: string
+                  enum:
+                    - Pending
+                    - Ready
+                    - Stopped
+                    - Stopping
+                  description: >-
+                    Read back from the backend Deployment rather than from
+                    spec.running, so an environment someone scaled by hand reads
+                    as stopped here. Stopping is worth separating from Stopped
+                    because the backend's pod holds the RWO data volume until it
+                    is gone.
+                bootstrapSecret:
+                  type: string
+                  description: >-
+                    Secret in this namespace holding the generated bootstrap
+                    password under `password`. Named rather than inlined: the
+                    password must not be readable to anyone who can only list
+                    Environments.
+                resolved:
+                  type: object
+                  description: >-
+                    Everything discovery settled, recorded so `kubectl get -o
+                    yaml` shows what an environment is actually running with and
+                    not merely what was asked for. Rewritten only when the
+                    controller resolves again; a value pinned in spec appears
+                    here unchanged.
+                  properties:
+                    backendImage:
+                      type: string
+                    hostname:
+                      type: string
+                    entryPort:
+                      type: integer
+                    ingressClass:
+                      type: string
+                    storageClass:
+                      type: string
+                    clusterIssuer:
+                      type: string
+                    issuerKind:
+                      type: string
+                    nestedPodCidr:
+                      type: string
+                    nestedServiceCidr:
+                      type: string
+                    exposure:
+                      type: string
+                      enum:
+                        - local
+                        - hop
+                        - direct
+                      description: >-
+                        How the environment is reached. `hop` means the host
+                        cluster fronts it; `direct` means the host could not, so
+                        it is named off the target cluster's own ingress.
+                    hop:
+                      type: object
+                      description: >-
+                        The fronting path, when there is one. Addresses are the
+                        only part that drifts -- replacing a node changes them --
+                        which is what the EndpointSlice resync exists for.
+                      properties:
+                        hostClusterId:
+                          type: string
+                        targetClusterId:
+                          type: string
+                        addresses:
+                          type: array
+                          items:
+                            type: string
+                        addressType:
+                          type: string
+                          enum:
+                            - ExternalIP
+                            - InternalIP
+                          description: >-
+                            Surfaced because the two have very different security
+                            properties: an ExternalIP hop leaves the VPC.
+                        port:
+                          type: integer
+                        ingressClass:
+                          type: string
+                        clusterIssuer:
+                          type: string
+                        issuerKind:
+                          type: string
+                        acme:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        format: int64

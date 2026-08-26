@@ -1,0 +1,37 @@
+# The smallest useful Environment. Everything else -- hostname, backend image,
+# ingress class, storage class, issuer, nested CIDRs -- is resolved by the
+# controller from the target cluster.
+apiVersion: remuda.rancher.io/v1alpha1
+kind: Environment
+metadata:
+  name: multi-idp
+  namespace: rancher-remuda
+spec:
+  repo: https://github.com/rak-phillip/dashboard
+  branch: task/17295-multi-idp
+---
+# The same thing with every resolvable field pinned, which is what the extension
+# sends. Setting one of these skips that piece of discovery; leaving it out is
+# almost always the better default.
+apiVersion: remuda.rancher.io/v1alpha1
+kind: Environment
+metadata:
+  name: multi-idp-pinned
+  namespace: rancher-remuda
+spec:
+  repo: https://github.com/rak-phillip/dashboard
+  branch: task/17295-multi-idp
+  running: true
+  clusterId: local
+  owner: rak-phillip
+  backendImage: rancher/rancher:head
+  hostname: multi-idp-pinned.rancher.example.com
+  dataSizeGb: 20
+  uiSizeGb: 2
+  cacheSizeGb: 8
+  ingressClass: traefik
+  storageClass: local-path
+  clusterIssuer: remuda-le
+  issuerKind: Issuer
+  nestedPodCidr: 10.44.0.0/16
+  nestedServiceCidr: 10.45.0.0/16

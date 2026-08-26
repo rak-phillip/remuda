@@ -1,4 +1,6 @@
-import { ENDPOINTS, LABEL_ENTRY_PORT, LABEL_TARGET_CLUSTER, ROLE_HOP } from './constants';
+import {
+  ENDPOINTS, LABEL_ADDRESSES_PINNED, LABEL_ENTRY_PORT, LABEL_TARGET_CLUSTER, ROLE_HOP,
+} from './constants';
 import { issuerAnnotations, issuerManifest, labelsFor } from './manifests';
 import type { ManifestRequest, RemudaSpec } from '../types';
 
@@ -51,6 +53,9 @@ export function hopManifests(spec: RemudaSpec): ManifestRequest[] {
       // has no access to the environment's record on the target cluster.
       [LABEL_TARGET_CLUSTER]: hop.targetClusterId,
       [LABEL_ENTRY_PORT]:     `${ hop.port }`,
+      // Only when the address is a load balancer's, which the controller must
+      // not recompute from nodes. See LABEL_ADDRESSES_PINNED.
+      ...(hop.source === 'loadBalancer' ? { [LABEL_ADDRESSES_PINNED]: 'true' } : {}),
     },
   };
 

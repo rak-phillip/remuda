@@ -1,6 +1,6 @@
-# Cluster-scoped read of the mirrored downstream nodes. This is the whole reason
-# the controller needs no downstream credentials: Rancher publishes every
-# cluster's node addresses here, namespaced by cluster ID.
+# Cluster-scoped, and the reason this controller needs no downstream credentials
+# at all: it reads what Rancher already publishes about other clusters, and
+# delivers to them through Fleet, which pulls rather than being pushed to.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -8,9 +8,33 @@ metadata:
   labels:
     {{- include "remuda-controller.labels" . | nindent 4 }}
 rules:
+  # Mirrored downstream nodes. This is what lets the hop resync run with no
+  # downstream credentials: Rancher publishes every cluster's node addresses
+  # here, namespaced by cluster ID.
   - apiGroups: ["management.cattle.io"]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  # Read-only, and for exactly two things: spec.fleetWorkspaceName, which says
+  # which namespace a cluster's Bundle belongs in, and the cluster's existence,
+  # which is what turns a typo in spec.clusterId into a condition rather than a
+  # silent no-op.
+  - apiGroups: ["management.cattle.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list", "watch"]
+  # How an environment reaches a cluster this controller has no credentials for:
+  # a Bundle here, applied there by the Fleet agent that every registered cluster
+  # already runs. Cluster-scoped because a Bundle lives in whichever Fleet
+  # workspace its cluster belongs to -- fleet-local for the host, fleet-default
+  # for the rest, and whatever an operator has moved a cluster into.
+  #
+  # `delete` is here and nowhere else in this chart. Every other object an
+  # environment is made of carries an owner reference back to it, so deleting the
+  # Environment collects them; a Bundle sits in a different namespace, which
+  # Kubernetes forbids an owner reference to cross, so nothing collects it and
+  # this controller has to. See reapBundles.
+  - apiGroups: ["fleet.cattle.io"]
+    resources: ["bundles"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -41,9 +65,53 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch"]
+  # EndpointSlices were update-only when the extension created them. The
+  # controller builds the hop itself now, so a downstream environment created
+  # from kubectl is reachable rather than merely deployed.
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
-    verbs: ["get", "list", "watch", "update"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  # traefik's answer to "reach the upstream over HTTPS without verifying it".
+  # nginx does the same job with an Ingress annotation and no object at all, so
+  # this is only ever created on a traefik host.
+  - apiGroups: ["traefik.io"]
+    resources: ["serverstransports"]
+    verbs: ["get", "list", "watch", "create"]
+  # The scriptable API. Read-only on the spec -- what the controller reports goes
+  # to the status subresource, which is why that is the only thing it can write.
+  - apiGroups: ["remuda.rancher.io"]
+    resources: ["environments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["remuda.rancher.io"]
+    resources: ["environments/status"]
+    verbs: ["get", "update", "patch"]
+  # What an environment is made of. No `delete` anywhere: every object carries an
+  # owner reference back to its Environment, so removing that collects the lot --
+  # build pods included, which a hand-rolled sweep has to chase separately
+  # because a DELETE on a Job defaults to Orphan propagation.
+  #
+  # `update` only on Deployments, because replicas is the one field the
+  # controller owns after creation. Everything else is created and then left
+  # alone: these are dev instances people poke at, and reverting a hand-raised
+  # resource limit every 30 seconds would be worse than useless.
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "persistentvolumeclaims", "services"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create"]
+  # Only ever the mirrored Issuer, and only on a cluster whose sole issuer is
+  # namespaced. A ClusterIssuer already exists and is not the controller's to
+  # create.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["issuers"]
+    verbs: ["get", "list", "watch", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

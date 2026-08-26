@@ -95,3 +95,27 @@ func TestDiffers(t *testing.T) {
 		})
 	}
 }
+
+func TestHopIsPinnedOnlyForALoadBalancer(t *testing.T) {
+	// The extension sets this when it took the address off a LoadBalancer
+	// Service. Recomputing that from nodes replaces a working address with nodes
+	// that are usually not listening on the port -- so the hop works until the
+	// first resync and then stops, which is worse than either answer alone.
+	if !HopIsPinned(map[string]string{LabelAddressesPinned: "true"}) {
+		t.Error("a load-balancer hop should be left alone")
+	}
+
+	// Everything else is node-addressed and is this controller's to maintain.
+	// That includes a hop recorded before the label existed, which is the safe
+	// default: stale node addresses are at worst already broken.
+	for _, labels := range []map[string]string{
+		nil,
+		{},
+		{LabelTargetCluster: "c-m-abc"},
+		{LabelAddressesPinned: "false"},
+	} {
+		if HopIsPinned(labels) {
+			t.Errorf("%v should not be treated as pinned", labels)
+		}
+	}
+}

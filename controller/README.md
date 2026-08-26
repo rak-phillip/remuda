@@ -1,6 +1,6 @@
 # remuda-controller
 
-Keeps the cross-cluster hop pointing at the right place.
+Serves Remuda's scriptable API, and keeps the cross-cluster hop pointing at the right place.
 
 The extension discovers a downstream cluster's ingress addresses once, when an environment is
 created, and writes them into an EndpointSlice on the management cluster. Those are node addresses,
@@ -10,7 +10,131 @@ that no longer exists.
 The UI repairs this too, but only while an environment's detail page is open **and in the
 foreground**; browsers throttle timers in background tabs. This controller removes that condition.
 
-## How it works
+## The Environment API
+
+`environments.remuda.rancher.io/v1alpha1` is how anything that is not the browser creates, deletes,
+starts and stops an environment. The CRD ships with this chart; see
+`deploy/examples/environment.yaml`.
+
+```bash
+kubectl apply -f environment.yaml
+kubectl get environments -n rancher-remuda
+kubectl patch environment multi-idp -n rancher-remuda --type=merge -p '{"spec":{"running":false}}'
+kubectl delete environment multi-idp -n rancher-remuda
+```
+
+The same objects are reachable through Rancher with an API token and no kubeconfig, over the Steve
+path the extension already uses:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  https://<rancher>/k8s/clusters/local/v1/remuda.rancher.io.environments/rancher-remuda/multi-idp
+```
+
+Authentication and RBAC come from Rancher either way, per namespace, which is the reason the API is
+a CRD rather than an HTTP server bolted onto this controller.
+
+### Spec is intent, status is fact
+
+Only `repo` and `branch` are required. Every other field is either defaulted by the schema
+(`running`, `clusterId`, the three volume sizes) or left empty for the controller to resolve from
+the target cluster — the base domain, the backend image for that branch, the ingress class, the
+storage class, the issuer, and a pair of nested CIDRs that clear the host cluster's.
+
+Setting a resolvable field **pins** it and skips that piece of discovery. Whatever was used, pinned
+or resolved, is written back to `status.resolved`, so `kubectl get environment -o yaml` shows what
+an environment is actually running with rather than only what was asked for.
+
+`status.run` is read back from the backend Deployment rather than from `spec.running`, so an
+environment someone scaled by hand reads as stopped here. That is deliberate: there is no second
+copy of the truth to drift from the first.
+
+### Why the CRD lives in `templates/`
+
+Helm installs `crds/` once and never upgrades it. For a schema still at `v1alpha1` that would mean
+every field added later silently failing to reach an existing install, surfacing as the API server
+dropping the field. It is a template with `helm.sh/resource-policy: keep` instead, which upgrades
+normally and still survives an uninstall along with every Environment under it.
+
+### What the controller does with one
+
+Every pass, for each Environment: resolve what the spec left out, create whatever is missing, scale
+both Deployments to match `spec.running`, and write back what it found.
+
+**Create-if-absent, not apply.** These are dev instances people poke at — an image swapped by hand,
+a resource limit raised to get one build through — and a controller that reverted those every 30
+seconds would be worse than useless. Replicas are the one exception, because that is the field
+`spec.running` actually means.
+
+**Deletion is the garbage collector's job.** Every object carries an owner reference back to its
+Environment, so `kubectl delete environment` collects the lot — build pods included. The extension
+has to sweep those by hand, because a `DELETE` on a Job defaults to Orphan propagation and the
+stranded pod then blocks its PVCs from ever finalising.
+
+**The build Job is only ever started once.** A Job is immutable, so a rebuild is a fresh Job with a
+fresh name; doing that on a schedule would rebuild every environment every interval. Triggering a
+rebuild is still the UI's.
+
+### Resolution reads what the extension already discovered
+
+The controller does **not** re-derive the cluster's defaults. Probing a wildcard needs a Job and a
+log read, picking non-colliding nested CIDRs needs the host cluster's own, and mirroring an issuer
+needs to go looking for one — all of that already runs in the browser, and its answer is already
+written to the `remuda-config` ConfigMap. The controller reads it from there.
+
+So an environment created entirely from `kubectl` needs that ConfigMap to exist: create one
+environment through the extension per cluster to record it, or pin every field in the spec. Absent
+it, the environment gets `Resolved=False` with a message saying so rather than a half-built
+workload.
+
+The one thing never guessed is the nested CIDR pair. A nested k3s sharing the host cluster's CIDRs
+cannot reach its own CoreDNS, and nothing in the environment recovers from that, so an unresolvable
+pair is an error rather than a default.
+
+### Downstream clusters go through Fleet
+
+An environment on any other cluster is delivered as a `fleet.cattle.io` Bundle targeting it, and the
+Fleet agent that every registered cluster already runs applies it. **Nothing is configured and no
+credential is stored** — that is the whole reason this is Fleet rather than a Rancher API token in a
+Secret.
+
+The Bundle is named `remuda-<environment>` and lives in the cluster's Fleet workspace, read from
+`spec.fleetWorkspaceName` on the management `Cluster` (`fleet-local` for the host, `fleet-default`
+for most others). It targets by the `management.cattle.io/cluster-name` label rather than by the
+Fleet cluster's own name, which is the display name someone chose rather than the `c-m-…` id
+everything else here speaks in.
+
+Three Bundle fields are deliberately left at Fleet's defaults. **`correctDrift`** is off, so Fleet
+*reports* drift and does not revert it — the same posture the host path takes, because these are dev
+instances people poke at. **`keepResources`** is off, so deleting the Bundle takes the workload.
+**`deleteNamespace`** is off, because `rancher-remuda` on the far side is shared.
+
+Deleting a Bundle is a sweep rather than a finalizer. A Bundle lives in a Fleet workspace while its
+Environment lives in `rancher-remuda`, and Kubernetes forbids an owner reference across namespaces,
+so nothing collects it on its own. A finalizer would need write access to the spec that this
+controller deliberately does not have, and would wedge every Environment in `Terminating` if the
+chart were ever uninstalled with environments still running. `reapBundles` runs after a **successful**
+list and removes Bundles whose Environment is gone, keyed on its UID rather than its name.
+
+#### What a downstream environment must pin
+
+Fleet delivers; it does not read back. So nothing here can see the target cluster's ingress class,
+its default StorageClass, or the CIDRs its own k3s uses — and `remuda-config` describes the *host*,
+which would be a wrong answer rather than a missing one. A downstream Environment therefore has to
+set `ingressClass`, `storageClass`, `nestedPodCidr` and `nestedServiceCidr`, and says so in a
+condition naming exactly which are absent. The extension can see all four and writes them in.
+
+#### What is lost downstream
+
+- **Build state.** Measured against a live Fleet: it tracks Deployments and PVCs but not Jobs, so
+  `status.build` is `Unknown` and the `Provisioned` condition says so.
+- **`Stopping`.** Fleet reports whether a Deployment matches its spec, not whether a pod is still
+  terminating — so a stop reads `Stopped` at once, and the window where the backend still holds the
+  RWO data volume is invisible.
+- **Hand-scaling.** `kubectl scale` on the far side still reads `Ready` here. Fleet notices and puts
+  it in the Bundle's `modifiedStatus`; `status.run` does not.
+
+## How the hop resync works
 
 It runs entirely on the management cluster. Rancher mirrors every downstream node into
 `nodes.management.cattle.io`, namespaced by cluster ID, so downstream addresses are readable here —

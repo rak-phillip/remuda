@@ -9,9 +9,15 @@ import "sort"
 const (
 	LabelManaged       = "remuda.rancher.io/managed"
 	LabelName          = "remuda.rancher.io/name"
+	LabelOwner         = "remuda.rancher.io/owner"
 	LabelRole          = "remuda.rancher.io/role"
 	LabelTargetCluster = "remuda.rancher.io/target-cluster"
 	LabelEntryPort     = "remuda.rancher.io/entry-port"
+
+	// LabelAddressesPinned marks a hop whose addresses came from a LoadBalancer
+	// rather than from nodes, and which this controller must therefore leave
+	// alone. See reconcile().
+	LabelAddressesPinned = "remuda.rancher.io/hop-addresses-pinned"
 
 	RoleHop   = "hop"
 	Namespace = "rancher-remuda"
@@ -34,6 +40,19 @@ type NodeAddresses struct {
 type Entry struct {
 	Addresses   []string
 	AddressType string
+}
+
+// HopIsPinned reports whether a hop's addresses are maintained somewhere other
+// than here, and so must be left exactly as they are.
+//
+// Only ever true for a LoadBalancer-fronted downstream ingress, which the
+// extension recognises by reading the Service. Anything else -- an unlabelled
+// hop, a hop from before this existed -- is node-addressed and is this
+// controller's to keep current, which is the safe default: stale node addresses
+// are at worst already broken, whereas overwriting a load balancer's address
+// breaks something that was working.
+func HopIsPinned(labels map[string]string) bool {
+	return labels[LabelAddressesPinned] == "true"
 }
 
 // AddressesFor picks the addresses a hop should dial for a set of nodes.

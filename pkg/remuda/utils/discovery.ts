@@ -594,7 +594,7 @@ export async function ingressEntry(store: any, clusterId: string, ingressClass: 
 
       if (svc?.spec?.type === 'LoadBalancer' && address.length && port) {
         return {
-          addresses: address, addressType: 'ExternalIP', port: port.port || 443
+          addresses: address, addressType: 'ExternalIP', port: port.port || 443, source: 'loadBalancer'
         };
       }
     }
@@ -604,7 +604,9 @@ export async function ingressEntry(store: any, clusterId: string, ingressClass: 
       const port = httpsPort(svc?.spec?.ports);
 
       if (svc?.spec?.type === 'NodePort' && port?.nodePort) {
-        return { ...await nodeAddresses(store, clusterId), port: port.nodePort };
+        return {
+          ...await nodeAddresses(store, clusterId), port: port.nodePort, source: 'node'
+        };
       }
     }
 
@@ -616,7 +618,9 @@ export async function ingressEntry(store: any, clusterId: string, ingressClass: 
         .find((p: any) => p.hostPort === 443 || p.name === 'websecure');
 
       if (port?.hostPort) {
-        return { ...await nodeAddresses(store, clusterId), port: port.hostPort };
+        return {
+          ...await nodeAddresses(store, clusterId), port: port.hostPort, source: 'node'
+        };
       }
     }
 

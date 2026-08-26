@@ -2,7 +2,8 @@ import {
   hopEndpointSlice, hopHasDrifted, hopManifests, hopName, hopSupported
 } from '../hop';
 import {
-  ENDPOINTS, LABEL_ENTRY_PORT, LABEL_NAME, LABEL_ROLE, LABEL_TARGET_CLUSTER, ROLE_HOP
+  ENDPOINTS, LABEL_ADDRESSES_PINNED, LABEL_ENTRY_PORT, LABEL_NAME, LABEL_ROLE,
+  LABEL_TARGET_CLUSTER, ROLE_HOP
 } from '../constants';
 import type { RemudaSpec } from '../../types';
 
@@ -248,5 +249,42 @@ describe('the hop and the target never share an issuer', () => {
     } as any);
 
     expect(hopManifests(targetOnly).map((m) => m.body.kind)).not.toContain('Issuer');
+  });
+});
+
+describe('hop address ownership', () => {
+  // The controller recomputes a hop's addresses from the target cluster's nodes
+  // every 30 seconds, because mirrored nodes are all it can read. That is right
+  // for a hostPort DaemonSet or a NodePort and wrong for a load balancer, whose
+  // address belongs to the LB and whose nodes are usually not listening on the
+  // port -- so an unlabelled LB hop works until the first resync and then stops.
+  it('marks a load-balancer hop so the controller leaves it alone', () => {
+    const manifests = hopManifests(spec({ hop: { ...spec().hop!, source: 'loadBalancer' } }));
+
+    // The Service is the one that has to carry it: the controller lists hop
+    // Services and reads the label straight off the one it is about to act on.
+    expect(byKind(manifests, 'Service').metadata.labels[LABEL_ADDRESSES_PINNED]).toBe('true');
+
+    // And the EndpointSlice, because that is the object the controller would
+    // otherwise overwrite -- so anyone reading it can see why it is untouched.
+    expect(byKind(manifests, 'EndpointSlice').metadata.labels[LABEL_ADDRESSES_PINNED]).toBe('true');
+
+    // The other two carry the plain environment labels and nothing hop-specific:
+    // the ServersTransport is referenced by name, and the Issuer is shared by
+    // every environment in the namespace and deliberately has no labels at all,
+    // which is what stops a delete sweep claiming it.
+    expect(byKind(manifests, 'ServersTransport').metadata.labels[LABEL_TARGET_CLUSTER]).toBeUndefined();
+    expect(byKind(manifests, 'Issuer')?.metadata.labels).toBeUndefined();
+  });
+
+  it('leaves a node-addressed hop unmarked, so the controller keeps it current', () => {
+    const fromNodes = hopManifests(spec({ hop: { ...spec().hop!, source: 'node' } }));
+
+    expect(byKind(fromNodes, 'Service').metadata.labels[LABEL_ADDRESSES_PINNED]).toBeUndefined();
+
+    // Absent source means a hop recorded before this existed. Unmarked is the
+    // safe default: stale node addresses are at worst already broken, whereas
+    // overwriting a load balancer's breaks something that was working.
+    expect(byKind(hopManifests(spec()), 'Service').metadata.labels[LABEL_ADDRESSES_PINNED]).toBeUndefined();
   });
 });

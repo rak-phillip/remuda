@@ -71,10 +71,10 @@ func main() {
 	}
 
 	ctx := context.Background()
-	c := &controller{core: core, dyn: dyn}
+	c := &controller{core: core, dyn: dyn, envs: &environmentClient{dyn: dyn}}
 
 	if once {
-		if err := c.reconcileAll(ctx); err != nil {
+		if err := c.reconcileOnce(ctx); err != nil {
 			log.Fatalf("reconcile failed: %v", err)
 		}
 
@@ -90,7 +90,7 @@ func main() {
 	log.Printf("reconciling every %s", interval)
 
 	for {
-		if err := c.reconcileAll(ctx); err != nil {
+		if err := c.reconcileOnce(ctx); err != nil {
 			log.Printf("reconcile failed, will retry: %v", err)
 		}
 
@@ -119,6 +119,7 @@ func restConfig() (*rest.Config, error) {
 type controller struct {
 	core kubernetes.Interface
 	dyn  dynamic.Interface
+	envs *environmentClient
 }
 
 // reconcileAll walks every hop Service and repoints the ones that have drifted.
@@ -144,6 +145,24 @@ func (c *controller) reconcileAll(ctx context.Context) error {
 }
 
 func (c *controller) reconcile(ctx context.Context, name string, labels map[string]string) error {
+	// A hop fronted by a real load balancer is not this controller's to
+	// maintain, and recomputing it would break it.
+	//
+	// Everything below derives addresses from the target cluster's *nodes*,
+	// because `nodes.management.cattle.io` is all that is readable from here.
+	// That is the right answer for a hostPort DaemonSet or a NodePort, where the
+	// ingress really is bound to the nodes. It is the wrong answer for a
+	// LoadBalancer Service, whose address belongs to the load balancer and whose
+	// nodes are very often not listening on that port at all -- so the hop would
+	// work until the first resync and then stop, which is worse than either
+	// answer alone.
+	//
+	// The extension knows which it found, because it read the Service, and says
+	// so with this label.
+	if HopIsPinned(labels) {
+		return nil
+	}
+
 	target := labels[LabelTargetCluster]
 	if target == "" {
 		return fmt.Errorf("no %s label, cannot tell which cluster to look at", LabelTargetCluster)
@@ -260,4 +279,17 @@ func portsFor(port int32) []discoveryv1.EndpointPort {
 		Port:     &port,
 		Protocol: &protocol,
 	}}
+}
+
+// reconcileOnce is one pass over both of the controller's jobs.
+//
+// Environments first: provisioning one is what creates the hop objects the
+// resync then repoints, so doing it the other way round would always leave a new
+// environment an interval behind.
+func (c *controller) reconcileOnce(ctx context.Context) error {
+	if err := c.reconcileEnvironments(ctx); err != nil {
+		return err
+	}
+
+	return c.reconcileAll(ctx)
 }

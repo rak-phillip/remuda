@@ -447,7 +447,7 @@ describe('ingressEntry', () => {
     });
 
     expect(await ingressEntry(store, 'c-m-dff2ssd2', 'traefik')).toEqual({
-      addresses: ['52.12.200.3'], addressType: 'ExternalIP', port: 443,
+      addresses: ['52.12.200.3'], addressType: 'ExternalIP', port: 443, source: 'node',
     });
   });
 
@@ -460,7 +460,7 @@ describe('ingressEntry', () => {
     });
 
     expect(await ingressEntry(store, 'c-m-dff2ssd2', 'traefik')).toEqual({
-      addresses: ['10.0.12.23'], addressType: 'InternalIP', port: 443,
+      addresses: ['10.0.12.23'], addressType: 'InternalIP', port: 443, source: 'node',
     });
   });
 
@@ -475,7 +475,17 @@ describe('ingressEntry', () => {
       nodeAddresses: bothAddresses,
     });
 
-    expect((await ingressEntry(store, 'c-m-x', 'traefik'))?.addresses).toEqual(['203.0.113.5']);
+    const entry = await ingressEntry(store, 'c-m-x', 'traefik');
+
+    expect(entry?.addresses).toEqual(['203.0.113.5']);
+
+    // addressType cannot carry this: a load balancer's address and a node's
+    // public address are both ExternalIP, and only one of them is a node. The
+    // controller recomputes hop addresses from nodes, so it has to be told which
+    // this is or it replaces a working LB address with node addresses that are
+    // usually not listening on the port. See LABEL_ADDRESSES_PINNED.
+    expect(entry?.source).toBe('loadBalancer');
+    expect(entry?.addressType).toBe('ExternalIP');
   });
 
   it('uses the assigned nodePort when the controller is a NodePort Service', async() => {
@@ -493,7 +503,7 @@ describe('ingressEntry', () => {
     });
 
     expect(await ingressEntry(store, 'c-m-x', 'nginx')).toEqual({
-      addresses: ['52.12.200.3'], addressType: 'ExternalIP', port: 31443,
+      addresses: ['52.12.200.3'], addressType: 'ExternalIP', port: 31443, source: 'node',
     });
   });
 

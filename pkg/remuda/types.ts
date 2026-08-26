@@ -3,6 +3,17 @@ export interface IngressEntry {
   addresses: string[];
   addressType: 'ExternalIP' | 'InternalIP';
   port: number;
+  /**
+   * How the address was found, which decides who owns it afterwards.
+   *
+   * `addressType` cannot answer this: a load balancer's address and a node's
+   * public address are both reported as `ExternalIP`, and only one of them is a
+   * node. The controller's resync recomputes addresses from the target
+   * cluster's *nodes*, so it must leave a `loadBalancer` entry alone or it
+   * replaces a working LB address with node addresses that may not be listening
+   * on that port at all. See LABEL_ADDRESSES_PINNED.
+   */
+  source: 'loadBalancer' | 'node';
 }
 
 /**
@@ -44,6 +55,8 @@ export interface HopSpec {
    * very different security properties: an ExternalIP hop leaves the VPC.
    */
   addressType: 'ExternalIP' | 'InternalIP';
+  /** See IngressEntry.source. Absent on hops recorded before it existed. */
+  source?: 'loadBalancer' | 'node';
   /**
    * Always the downstream ingress's *HTTPS* entry point.
    *

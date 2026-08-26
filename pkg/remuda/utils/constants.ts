@@ -42,6 +42,22 @@ export const LABEL_ROLE = 'remuda.rancher.io/role';
 export const LABEL_TARGET_CLUSTER = 'remuda.rancher.io/target-cluster';
 export const LABEL_ENTRY_PORT = 'remuda.rancher.io/entry-port';
 
+/**
+ * Set when the hop's addresses came from a LoadBalancer rather than from nodes.
+ *
+ * The controller's resync recomputes addresses from the target cluster's
+ * *nodes*, because that is all `nodes.management.cattle.io` mirrors. For a
+ * downstream ingress behind a real load balancer that is simply the wrong
+ * answer: it replaces a working LB address with node addresses that are very
+ * often not listening on that port, and it does so within one interval -- so
+ * the hop works until the first resync and then stops.
+ *
+ * This label is how the two agree on who owns the addresses. The controller
+ * skips any hop carrying it and leaves those addresses to the UI, which reads
+ * the Service that actually has them. See IngressEntry.source.
+ */
+export const LABEL_ADDRESSES_PINNED = 'remuda.rancher.io/hop-addresses-pinned';
+
 export const ROLE_BACKEND = 'backend';
 export const ROLE_UI = 'ui';
 export const ROLE_BUILD = 'build';
