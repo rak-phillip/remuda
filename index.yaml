@@ -13,35 +13,6 @@ entries:
       catalog.cattle.io/ui-component: plugins
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
-    appVersion: 0.2.0-rc.2
-    created: "2026-08-26T17:22:12.911242439Z"
-    description: Deploy a Rancher instance running a dashboard branch, so QA and design
-      can review WIP work
-    digest: 5e3665772fc5e9e90dbefe31aff26d1256afdea5e5477469ae8895bcb581b5a0
-    home: https://github.com/rak-phillip/remuda
-    icon: https://raw.githubusercontent.com/rak-phillip/remuda/main/icon.svg
-    keywords:
-    - rancher
-    - dashboard
-    - development
-    - preview
-    name: remuda
-    type: application
-    urls:
-    - https://github.com/rak-phillip/remuda/releases/download/remuda-0.2.0-rc.2/remuda-0.2.0-rc.2.tgz
-    version: 0.2.0-rc.2
-  - annotations:
-      catalog.cattle.io/certified: rancher
-      catalog.cattle.io/display-name: Remuda
-      catalog.cattle.io/kube-version: '>= v1.26.0-0'
-      catalog.cattle.io/namespace: cattle-ui-plugin-system
-      catalog.cattle.io/os: linux
-      catalog.cattle.io/permits-os: linux, windows
-      catalog.cattle.io/rancher-version: '>= 2.10.0'
-      catalog.cattle.io/scope: management
-      catalog.cattle.io/ui-component: plugins
-      catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
-    apiVersion: v2
     appVersion: 0.1.7
     created: "2026-08-25T21:06:53.482877264Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
@@ -407,4 +378,4 @@ entries:
     urls:
     - assets/remuda-controller/remuda-controller-0.1.0.tgz
     version: 0.1.0
-generated: "2026-08-26T17:22:12.911308608Z"
+generated: "2026-08-25T21:06:53.48154352Z"
