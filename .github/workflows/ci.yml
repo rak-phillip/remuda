@@ -8,8 +8,13 @@
 name: CI
 
 on:
+  # release-candidate as well as main: a candidate is tagged from that branch,
+  # and a tag is a bad place for CI to see the code for the first time. 0.2.0-rc.1
+  # shipped a type error to a release run because a branch push ran nothing --
+  # `yarn test` is babel-jest and strips types without checking them, so the build
+  # step here is the only thing that catches them.
   push:
-    branches: [main]
+    branches: [main, release-candidate]
     # deploy/** is not ignored: the controller chart carries a version that has
     # to stay in step with the packages, and the check above is what enforces it.
     paths-ignore: ['controller/**', '**.md']

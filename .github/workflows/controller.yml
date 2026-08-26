@@ -3,8 +3,9 @@ name: Controller
 # CI only. Publishing the image and the chart lives in release.yml, so there is
 # exactly one place a tag turns into artifacts.
 on:
+  # release-candidate as well as main -- see the note in ci.yml.
   push:
-    branches: [main]
+    branches: [main, release-candidate]
     paths: ['controller/**', 'deploy/chart/**', '.github/workflows/controller.yml']
   pull_request:
     paths: ['controller/**', 'deploy/chart/**', '.github/workflows/controller.yml']

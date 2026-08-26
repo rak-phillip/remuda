@@ -233,7 +233,7 @@ describe('resyncHop', () => {
   } as RemudaSpec;
 
   const entry: IngressEntry = {
-    addresses: ['52.12.200.9'], addressType: 'ExternalIP', port: 443
+    addresses: ['52.12.200.9'], addressType: 'ExternalIP', port: 443, source: 'node'
   };
 
   it('carries resourceVersion, which Steve requires on any update', async() => {
@@ -277,7 +277,7 @@ describe('resyncHop', () => {
     const store = { dispatch: jest.fn() };
 
     expect(await resyncHop(store, spec, {
-      addresses: [], addressType: 'ExternalIP', port: 443
+      addresses: [], addressType: 'ExternalIP', port: 443, source: 'node'
     })).toBe(false);
     expect(store.dispatch).not.toHaveBeenCalled();
   });
