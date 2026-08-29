@@ -364,6 +364,7 @@ Index URL   https://rak-phillip.github.io/remuda/
 ```
 
 **Remuda** then appears under **Extensions**, and `remuda-controller` under **Apps → Charts**.
+Release candidates live in a separate repository — see [Release candidates](#release-candidates).
 
 Two things worth knowing before installing:
 
@@ -422,7 +423,43 @@ What a tag produces:
 | `controller-image` | Controller image | `ghcr.io/rak-phillip/remuda-controller` |
 | `controller-chart` | Controller chart | `gh-pages`, merged into the same index |
 
-`controller-chart` runs strictly after `charts`, because both push to `gh-pages`.
+`controller-chart` runs strictly after the extension chart, because both push to the same branch.
+
+### Release candidates
+
+A SemVer pre-release suffix is the whole signal. `v0.2.0-rc.1` is a candidate; `v0.2.0` is
+production. Same command, same jobs, same artifacts:
+
+```bash
+yarn version --new-version 0.2.0-rc.1
+git push && git push --tags
+```
+
+A candidate differs in exactly three places:
+
+- **It publishes to `gh-pages-rc`**, not `gh-pages`, so it is never offered to anyone using the
+  production Index URL.
+- **It never moves the `latest` image tag.** The controller chart's `image.tag` defaults to
+  `.Chart.AppVersion`, so an unpinned `helm install` must not be able to pull a candidate.
+- **`charts-rc` runs instead of `charts`.** The upstream reusable workflow ends in
+  `helm/chart-releaser-action`, whose `pages_branch` defaults to `gh-pages` and which
+  `build-extension-charts.yml` does not expose as an input — so it writes the index to production
+  whatever `target_branch` says. `0.2.0-rc.2` leaked into the production index this way and had to
+  be reverted by hand. `charts-rc` does the same work without it.
+
+Nothing else about chart-releaser is load-bearing: `publish-pkgs` alone produces a complete,
+correctly merged repository. Dropping it costs a candidate its GitHub Release and its
+`remuda-X.Y.Z` tag, both of which were noise.
+
+Install a candidate by adding a second repository. `gh-pages-rc` is a valid Helm repository but
+**GitHub Pages serves one branch per repository**, so it has no Pages URL:
+
+```
+Index URL   https://raw.githubusercontent.com/rak-phillip/remuda/gh-pages-rc/
+```
+
+That is not a workaround. `publish-pkgs` bakes a branch-derived `raw.githubusercontent.com`
+endpoint into every chart's `values.yaml`, so production serves its plugin assets the same way.
 
 ### First-time repository setup
 
@@ -435,6 +472,15 @@ git push -u origin gh-pages && git switch main
 
 gh api -X POST repos/rak-phillip/remuda/pages \
   -f 'source[branch]=gh-pages' -f 'source[path]=/'
+```
+
+`gh-pages-rc` needs the same branch and no Pages configuration. Creating it with plumbing avoids
+`--orphan` emptying a dirty working tree:
+
+```bash
+git push origin \
+  "$(git commit-tree "$(git hash-object -t tree /dev/null)" \
+       -m 'Release candidate Helm repository')":refs/heads/gh-pages-rc
 ```
 
 ## Development

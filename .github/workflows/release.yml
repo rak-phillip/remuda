@@ -123,9 +123,18 @@ jobs:
           echo "$bundle is $(stat -c%s "$bundle") bytes"
 
   # Publishes the Helm repository the Extensions screen installs from.
+  #
+  # Production only. The last step of the upstream workflow is
+  # helm/chart-releaser-action, whose `pages_branch` defaults to `gh-pages` and
+  # which build-extension-charts.yml does not expose as an input -- so it writes
+  # the index to `gh-pages` whatever `target_branch` says. Correct for a
+  # production release; a leak for a candidate. v0.2.0-rc.2 landed in the
+  # production index this way and had to be reverted by hand. Candidates go
+  # through `charts-rc` instead.
   charts:
     name: Extension chart
     needs: [version, verify]
+    if: needs.version.outputs.prerelease == 'false'
     uses: rancher/dashboard/.github/workflows/build-extension-charts.yml@master
     permissions:
       contents: write
@@ -133,6 +142,95 @@ jobs:
     with:
       target_branch: ${{ needs.version.outputs.pages_branch }}
       tagged_release: ${{ needs.version.outputs.tagged_release }}
+
+  charts-rc:
+    name: Extension chart (candidate)
+    needs: [version, verify]
+    if: needs.version.outputs.prerelease == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: source
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.pages_branch }}
+          path: pages
+          # Full history so the commit step can rebase before pushing.
+          fetch-depth: 0
+
+      - run: corepack enable
+
+      - uses: actions/setup-node@v7
+        with:
+          cache: yarn
+          cache-dependency-path: source/yarn.lock
+          node-version-file: source/.nvmrc
+
+      # Pinned to what the upstream workflow uses, so a candidate's chart is
+      # packaged by the same helm that will package the production release.
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.8.0
+
+      - run: yarn install --frozen-lockfile
+        working-directory: ./source
+
+      - name: Build and package the extension
+        working-directory: ./source
+        run: |
+          set -euo pipefail
+
+          yarn publish-pkgs \
+            -s '${{ github.repository }}' \
+            -b '${{ needs.version.outputs.pages_branch }}' \
+            -t '${{ needs.version.outputs.tagged_release }}'
+
+      - name: Check the candidate actually built
+        working-directory: ./source
+        run: |
+          set -euo pipefail
+
+          tag='${{ needs.version.outputs.tagged_release }}'
+          version='${{ needs.version.outputs.version }}'
+          name="${tag%-"$version"}"
+
+          chart="tmp/assets/${name}/${tag}.tgz"
+          bundle="tmp/extensions/${name}/${version}/plugin/${tag}.umd.min.js"
+
+          for f in "$chart" "$bundle"; do
+            if [[ ! -s "$f" ]]; then
+              echo "::error::$f is missing or empty. publish-pkgs did not build ${tag}."
+              exit 1
+            fi
+            echo "$f is $(stat -c%s "$f") bytes"
+          done
+
+      - name: Commit
+        run: |
+          set -euo pipefail
+
+          # `cp -r <dir>/. <dest>/` merges into the directories already on the
+          # branch rather than nesting inside them.
+          cp -r source/tmp/. pages/
+
+          cd pages
+
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add assets charts extensions index.yaml
+
+          if git diff --cached --quiet; then
+            echo "Nothing to publish; this version is already in the index."
+            exit 0
+          fi
+
+          git commit -m "Add ${{ needs.version.outputs.tagged_release }}"
+          git pull --rebase origin "${{ needs.version.outputs.pages_branch }}"
+          git push origin "${{ needs.version.outputs.pages_branch }}"
 
   # The air-gapped install path: Extensions -> Manage Extension Catalogs.
   catalog:
@@ -192,11 +290,15 @@ jobs:
           cache-to: type=gha,mode=max
 
   # Adds the controller chart to the same Helm repository as the extension, so
-  # one Index URL serves both. Strictly after `charts`: both jobs push to the
-  # same branch, and running them together would race.
+  # one Index URL serves both. Strictly after whichever extension-chart job ran:
+  # both push to the same branch, and running them together would race.
   controller-chart:
     name: Controller chart
-    needs: [version, charts, controller-image]
+    needs: [version, charts, charts-rc, controller-image]
+    # Exactly one of `charts` / `charts-rc` runs, so the default "skip if a
+    # dependency was skipped" would skip this job on every release. Run unless
+    # something actually went wrong.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
