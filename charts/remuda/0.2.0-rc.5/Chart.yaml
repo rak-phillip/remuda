@@ -1,0 +1,26 @@
+annotations:
+  catalog.cattle.io/certified: rancher
+  catalog.cattle.io/namespace: cattle-ui-plugin-system
+  catalog.cattle.io/os: linux
+  catalog.cattle.io/permits-os: linux, windows
+  catalog.cattle.io/scope: management
+  catalog.cattle.io/ui-component: plugins
+  catalog.cattle.io/rancher-version: '>= 2.10.0'
+  catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
+  catalog.cattle.io/display-name: Remuda
+  catalog.cattle.io/kube-version: '>= v1.26.0-0'
+apiVersion: v2
+appVersion: 0.2.0-rc.5
+description: >-
+  Deploy a Rancher instance running a dashboard branch, so QA and design can
+  review WIP work
+name: remuda
+type: application
+keywords:
+  - rancher
+  - dashboard
+  - development
+  - preview
+version: 0.2.0-rc.5
+icon: https://raw.githubusercontent.com/rak-phillip/remuda/main/icon.svg
+home: https://github.com/rak-phillip/remuda
