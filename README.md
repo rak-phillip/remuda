@@ -293,23 +293,31 @@ things follow from it:
   the wildcard record pointed at the target cluster's ingress — the same arrangement, without the
   dependency on a third party's DNS.
 
-### remuda-controller (optional)
+### remuda-controller
 
-`controller/` is a small Go controller that removes that condition, reconciling every hop on the
-management cluster whether or not anyone is looking. It writes EndpointSlices and nothing else —
-the split is that **the UI discovers topology once at create; the controller refreshes addresses
-forever** — and it reads downstream node addresses from `nodes.management.cattle.io`, so it needs no
-downstream credentials.
+`controller/` is a small Go controller on the management cluster, and from 0.2.0 it is **required**
+rather than an optimisation. It does two jobs.
+
+It **builds environments**. The extension writes one `Environment` custom resource and the
+controller resolves and provisions it, which is also what makes Remuda scriptable — the same
+resource can be created with `kubectl` or over Rancher's API, so a CI job or an agent can stand an
+environment up from a pull request. See `controller/README.md`.
+
+It **keeps the cross-cluster hop pointing at current addresses**, reconciling every hop whether or
+not anyone is looking. That is the condition described above: the split is that **the UI discovers
+topology once at create; the controller refreshes addresses forever**. It reads downstream node
+addresses from `nodes.management.cattle.io`, so it needs no downstream credentials.
 
 It ships as its own chart, separate from the UIPlugin chart, because that one is regenerated from an
-upstream template on every publish and cannot carry extra templates:
+upstream template on every publish and cannot carry extra templates. Install it from the same
+repository as the extension — see [Installing](#installing) — or from a checkout:
 
 ```bash
 helm install remuda-controller ./deploy/chart/remuda-controller -n cattle-remuda-system --create-namespace
 ```
 
-Everything works without it; the hop is simply repaired only while a detail page is in the
-foreground. See `controller/README.md`.
+Environments created by an older version keep working without it: they are managed from the browser
+as they always were, and stay startable, stoppable and deletable. Only new environments need it.
 
 ## Resource cost
 
@@ -357,22 +365,84 @@ One build at a time is comfortable on such a node.
 
 ## Installing
 
-Add the Helm repository once, in **Apps → Repositories → Create → Helm Repository**:
+Remuda is two charts from one Helm repository: the **extension**, which is the UI, and the
+**controller**, which builds environments and serves the Environment API.
 
+Install both from `0.2.0` onward — the extension asks the controller for an environment and cannot
+create one without it. On `0.1.x` the extension builds environments itself and the controller only
+adds the hop resync, so it is worth having but not required.
+
+### Pick a channel
+
+| | Stable | Candidate |
+|---|---|---|
+| **Index URL** | `https://rak-phillip.github.io/remuda/` | `https://raw.githubusercontent.com/rak-phillip/remuda/gh-pages-rc/` |
+| Versions | `0.1.x` | `0.2.0-rc.x` |
+| Use it when | you want the released extension | you are testing what is coming next |
+
+The candidate URL is `raw.githubusercontent.com` rather than a Pages site because **GitHub Pages
+serves one branch per repository**, and candidates publish to `gh-pages-rc`. That is not a
+workaround: the extension tooling bakes a branch-derived `raw.githubusercontent.com` endpoint into
+every chart's `values.yaml`, so the stable channel serves its plugin assets the same way.
+
+Both channels can be added at once — they are separate repositories and neither offers the other's
+versions.
+
+### 1. Add the repository
+
+**Apps → Repositories → Create → Helm Repository**, and paste the Index URL for your channel.
+
+### 2. Install the extension
+
+**Remuda** now appears under **Extensions**. Install it there.
+
+### 3. Install the controller
+
+`remuda-controller` appears under **Apps → Charts** in the same repository. Install it into
+`cattle-remuda-system`.
+
+> **On the candidate channel, turn on prereleases first.** Every candidate version is a SemVer
+> pre-release, and **Apps → Charts hides pre-release versions by default** — a chart with no
+> remaining versions is dropped from the list entirely, so the repository looks empty rather than
+> filtered. Enable **Include Prerelease Versions** under your user **Preferences**, or use the
+> `helm` commands below, which are unaffected. The extension itself is unaffected too: **Extensions**
+> is a separate screen with its own handling, which is why Remuda appears there while the controller
+> appears nowhere.
+
+From the command line instead:
+
+```bash
+helm repo add remuda https://rak-phillip.github.io/remuda/
+helm install remuda-controller remuda/remuda-controller \
+  -n cattle-remuda-system --create-namespace
 ```
-Index URL   https://rak-phillip.github.io/remuda/
+
+For a candidate, add the candidate URL and **pin the version** — `helm` hides pre-releases unless
+you ask for one by name or pass `--devel`:
+
+```bash
+helm repo add remuda-rc https://raw.githubusercontent.com/rak-phillip/remuda/gh-pages-rc/
+helm install remuda-controller remuda-rc/remuda-controller \
+  --version 0.2.0-rc.3 -n cattle-remuda-system --create-namespace
 ```
 
-**Remuda** then appears under **Extensions**, and `remuda-controller` under **Apps → Charts**.
-Release candidates live in a separate repository — see [Release candidates](#release-candidates).
+### Check it worked
 
-Two things worth knowing before installing:
+The controller brings the Environment CRD with it, and that is what the extension tests for before
+letting you create anything:
 
-- The extension bundle is fetched at runtime from `raw.githubusercontent.com`, so the cluster running
-  `ui-plugin-server` needs egress to GitHub. For an air-gapped install use the Extension Catalog Image
-  at `ghcr.io/rak-phillip/ui-extension-remuda` instead, via **Extensions → Manage Extension Catalogs**.
-- The controller is optional. Without it the cross-cluster hop is still repaired, but only while an
-  environment's detail page is open and in the foreground.
+```bash
+kubectl get crd environments.remuda.rancher.io
+```
+
+If that returns nothing, the extension will say so on the create form rather than leaving you with a
+record and no environment.
+
+### Air-gapped installs
+
+The extension bundle is fetched at runtime from `raw.githubusercontent.com`, so the cluster running
+`ui-plugin-server` needs egress to GitHub. Where it does not have it, use the Extension Catalog Image
+at `ghcr.io/rak-phillip/ui-extension-remuda` via **Extensions → Manage Extension Catalogs** instead.
 
 ## Releasing
 
@@ -451,15 +521,8 @@ Nothing else about chart-releaser is load-bearing: `publish-pkgs` alone produces
 correctly merged repository. Dropping it costs a candidate its GitHub Release and its
 `remuda-X.Y.Z` tag, both of which were noise.
 
-Install a candidate by adding a second repository. `gh-pages-rc` is a valid Helm repository but
-**GitHub Pages serves one branch per repository**, so it has no Pages URL:
-
-```
-Index URL   https://raw.githubusercontent.com/rak-phillip/remuda/gh-pages-rc/
-```
-
-That is not a workaround. `publish-pkgs` bakes a branch-derived `raw.githubusercontent.com`
-endpoint into every chart's `values.yaml`, so production serves its plugin assets the same way.
+Installing a candidate is the candidate channel in [Installing](#installing); nothing about it is
+special beyond the Index URL.
 
 ### First-time repository setup
 

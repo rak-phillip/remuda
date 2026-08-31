@@ -181,8 +181,11 @@ remuda:
   warning:
     noController: >-
       This Rancher has no Remuda controller, which is what builds an environment
-      once you ask for one. Install the remuda-controller chart from Apps, from
-      the same repository this extension came from, then reload this page.
+      once you ask for one. Install the remuda-controller chart from the same
+      repository you installed Remuda from, then reload this page. If that is a
+      release candidate repository, Apps shows no charts from it until Include
+      Prerelease Versions is turned on under Preferences -- installing with helm
+      and an explicit --version works without that.
     localCluster: >-
       This targets the local management cluster, which already runs this Rancher.
       A dev environment here competes for the same node's CPU, memory and disk.
@@ -272,7 +275,7 @@ remuda:
     storageInstallFailed: Could not install local-path storage on this cluster
     controllerMissing: >-
       The Remuda controller is not installed, so nothing would build this
-      environment. Install the remuda-controller chart and try again.
+      environment. See the banner above for how to install it.
     hostnameTaken: >-
       Another environment already uses this hostname. Names are shared across
       every cluster, because they all come from one wildcard DNS record -- pick a
