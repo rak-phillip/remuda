@@ -1,7 +1,17 @@
 import {
-  REMUDA_NS, ENDPOINTS, INOTIFY_LIMITS, K3S_CONFIG_PATH, LABEL_MANAGED, LABEL_NAME, LABEL_OWNER,
-  LABEL_ROLE, ROLE_BACKEND, ROLE_BUILD, ROLE_UI, UI_BUNDLE_PATH, BUILD_IMAGE, SERVE_IMAGE,
-  REMUDA_ISSUER_NAME, REMUDA_ISSUER_ACCOUNT_SECRET, NGINX_CONFIG_PATH, ROLE_PROBE,
+  REMUDA_NS,
+  ENDPOINTS,
+  LABEL_MANAGED,
+  LABEL_NAME,
+  LABEL_OWNER,
+  LABEL_ROLE,
+  ROLE_BUILD,
+  ROLE_UI,
+  UI_BUNDLE_PATH,
+  BUILD_IMAGE,
+  REMUDA_ISSUER_NAME,
+  REMUDA_ISSUER_ACCOUNT_SECRET,
+  ROLE_PROBE,
   DNS_PROBE_IMAGE,
 } from './constants';
 import type { IssuerKind, RemudaSpec, ManifestRequest } from '../types';
@@ -29,11 +39,6 @@ const browserOrigin = (spec: RemudaSpec): string => `https://${ spec.hostname }$
 /** Browser-facing. Baked into the bundle's asset URLs at build time. */
 export const resourceBase = (spec: RemudaSpec): string => `${ browserOrigin(spec) }/${ UI_BUNDLE_PATH }`;
 
-/**
- * Pod-facing. Rancher fetches ui-dashboard-index server-side, so this stays
- * in-cluster over plain HTTP and never depends on hairpinning through the ingress.
- */
-export const dashboardIndexUrl = (spec: RemudaSpec): string => `http://${ spec.name }-ui.${ spec.namespace }.svc.cluster.local/${ UI_BUNDLE_PATH }/index.html`;
 
 /**
  * The same index, addressed the way a Rancher *outside* this cluster has to
@@ -67,235 +72,7 @@ export function namespaceManifest(namespace: string = REMUDA_NS): ManifestReques
   };
 }
 
-export function recordManifest(spec: RemudaSpec): ManifestRequest {
-  return {
-    endpoint: ENDPOINTS.configmap,
-    body:     {
-      apiVersion: 'v1',
-      kind:       'ConfigMap',
-      metadata:   meta(spec, spec.name),
-      data:       { spec: JSON.stringify(spec, null, 2) },
-    },
-  };
-}
 
-export function bootstrapSecretManifest(spec: RemudaSpec, password: string): ManifestRequest {
-  return {
-    endpoint: ENDPOINTS.secret,
-    body:     {
-      apiVersion: 'v1',
-      kind:       'Secret',
-      metadata:   meta(spec, `${ spec.name }-bootstrap`),
-      type:       'Opaque',
-      stringData: { password },
-    },
-  };
-}
-
-function pvcManifest(spec: RemudaSpec, suffix: string, sizeGb: number, role: string): ManifestRequest {
-  return {
-    endpoint: ENDPOINTS.persistentvolumeclaim,
-    body:     {
-      apiVersion: 'v1',
-      kind:       'PersistentVolumeClaim',
-      metadata:   meta(spec, `${ spec.name }-${ suffix }`, role),
-      spec:       {
-        accessModes: ['ReadWriteOnce'],
-        resources:   { requests: { storage: `${ sizeGb }Gi` } },
-        // Omitted entirely when the cluster has no default class, rather than
-        // sending an explicit undefined that Steve would reject.
-        ...(spec.storageClass ? { storageClassName: spec.storageClass } : {}),
-      },
-    },
-  };
-}
-
-export const dataPvcManifest = (spec: RemudaSpec) => pvcManifest(spec, 'data', spec.dataSizeGb, ROLE_BACKEND);
-export const uiPvcManifest = (spec: RemudaSpec) => pvcManifest(spec, 'ui', spec.uiSizeGb, ROLE_UI);
-export const cachePvcManifest = (spec: RemudaSpec) => pvcManifest(spec, 'cache', spec.cacheSizeGb, ROLE_BUILD);
-
-/** Name of the ConfigMap carrying the nested k3s config file. */
-export const k3sConfigName = (spec: RemudaSpec): string => `${ spec.name }-k3s-config`;
-
-/**
- * Config for the k3s that the backend image starts inside its own pod.
- *
- * Rancher launches it as a plain subprocess -- `exec.Command("k3s", "server", ...)`
- * in norman's kwrapper -- so the k3s binary does its own CLI parsing and picks up
- * /etc/rancher/k3s/config.yaml. Neither CIDR is passed on that command line, so
- * the file is free to set them, and it is the only lever available: the image
- * entrypoint sends trailing args to `rancher`, not to `k3s`.
- *
- * cluster-dns is pinned rather than left to k3s's derivation so the value is
- * visible here next to the range it has to fall inside.
- */
-export function k3sConfigManifest(spec: RemudaSpec): ManifestRequest {
-  const config = [
-    'cluster-cidr:',
-    `  - "${ spec.nestedPodCidr }"`,
-    'service-cidr:',
-    `  - "${ spec.nestedServiceCidr }"`,
-    'cluster-dns:',
-    `  - "${ clusterDnsFor(spec.nestedServiceCidr) }"`,
-    '',
-  ].join('\n');
-
-  return {
-    endpoint: ENDPOINTS.configmap,
-    body:     {
-      apiVersion: 'v1',
-      kind:       'ConfigMap',
-      metadata:   meta(spec, k3sConfigName(spec), ROLE_BACKEND),
-      data:       { 'config.yaml': config },
-    },
-  };
-}
-
-/** k3s puts the DNS service at the tenth address of the service range. */
-export function clusterDnsFor(serviceCidr: string): string {
-  const [base] = serviceCidr.split('/');
-  const octets = base.split('.');
-
-  return [octets[0], octets[1], octets[2], '10'].join('.');
-}
-
-/**
- * Raise the node's inotify limits before the backend starts.
- *
- * These are not namespaced sysctls, so securityContext.sysctls cannot set them
- * and each environment has to widen the shared host budget itself. Writing
- * through /proc/sys from a privileged container is the only lever a workload
- * has; the container is already privileged for the nested k3s, so this asks for
- * nothing extra.
- *
- * Best-effort on purpose -- a node that already has generous limits, or one
- * with a read-only /proc/sys, should not stop an environment from starting. The
- * values are echoed so the init container's log says what actually took effect.
- */
-export function inotifyInitContainer(spec: RemudaSpec) {
-  const writes = Object.entries(INOTIFY_LIMITS)
-    .map(([key, value]) => {
-      const path = `/proc/sys/${ key.replace(/\./g, '/') }`;
-
-      return `echo ${ value } > ${ path } 2>/dev/null || echo "could not raise ${ key }"`;
-    })
-    .join('; ');
-
-  const reads = Object.keys(INOTIFY_LIMITS)
-    .map((key) => `echo "${ key }=$(cat /proc/sys/${ key.replace(/\./g, '/') })"`)
-    .join('; ');
-
-  return {
-    name:            'raise-inotify-limits',
-    // The backend image, so this costs no additional pull.
-    image:           spec.backendImage,
-    imagePullPolicy: 'IfNotPresent',
-    command:         ['sh', '-c', `${ writes }; ${ reads }`],
-    securityContext: { privileged: true },
-    resources:       { requests: { cpu: '10m', memory: '16Mi' } },
-  };
-}
-
-export function backendDeploymentManifest(spec: RemudaSpec): ManifestRequest {
-  const selector = { [LABEL_NAME]: spec.name, [LABEL_ROLE]: ROLE_BACKEND };
-
-  return {
-    endpoint: ENDPOINTS.deployment,
-    body:     {
-      apiVersion: 'apps/v1',
-      kind:       'Deployment',
-      metadata:   meta(spec, spec.name, ROLE_BACKEND),
-      spec:       {
-        replicas: 1,
-        selector: { matchLabels: selector },
-        // The data PVC is RWO, so the old pod must go before the new one starts.
-        strategy: { type: 'Recreate' },
-        template: {
-          metadata: { labels: labelsFor(spec, ROLE_BACKEND) },
-          spec:     {
-            // Rancher picks embedded-k3s vs in-cluster mode partly on whether a
-            // service account token is mounted. Without this it can try to drive
-            // the HOST cluster instead of starting its own k3s.
-            automountServiceAccountToken: false,
-            // dnsPolicy is deliberately left at the ClusterFirst default.
-            //
-            // An earlier workaround set it to 'Default' because the container
-            // could not use the host CoreDNS -- but that was a symptom of the
-            // CIDR collision, which made 10.43.0.10 ambiguous between the host
-            // and nested clusters. With the CIDRs separated the host CoreDNS is
-            // unambiguous again, and ClusterFirst is what lets this pod resolve
-            // the UI Service that CATTLE_UI_DASHBOARD_INDEX points at. Setting
-            // 'Default' here gives the node's resolvers, under which
-            // *.svc.cluster.local does not resolve at all.
-            initContainers:               [inotifyInitContainer(spec)],
-            containers:                   [{
-              name:            'rancher',
-              image:           spec.backendImage,
-              imagePullPolicy: 'Always',
-              args:            ['--no-cacerts', '--http-listen-port=80', '--https-listen-port=443'],
-              securityContext: { privileged: true },
-              ports:           [{ containerPort: 80, name: 'http' }, { containerPort: 443, name: 'https' }],
-              env:             [
-                { name: 'CATTLE_UI_OFFLINE_PREFERRED', value: 'false' },
-                { name: 'CATTLE_UI_DASHBOARD_INDEX', value: dashboardIndexUrl(spec) },
-                {
-                  name:      'CATTLE_BOOTSTRAP_PASSWORD',
-                  valueFrom: { secretKeyRef: { name: `${ spec.name }-bootstrap`, key: 'password' } },
-                },
-              ],
-              volumeMounts: [
-                { name: 'data', mountPath: '/var/lib/rancher' },
-                // subPath so k3s keeps a writable /etc/rancher/k3s to drop its
-                // generated kubeconfig into.
-                {
-                  name: 'k3s-config', mountPath: K3S_CONFIG_PATH, subPath: 'config.yaml',
-                },
-              ],
-              /**
-               * Without this the pod is Ready the instant the process starts,
-               * which is seconds -- while Rancher needs minutes. Measured on a
-               * restart of an existing environment: pod start to /dashboard/
-               * answering 200 was 6m06s, and the Deployment reported
-               * readyReplicas=1 for all of it. Everything reading that field --
-               * this extension's own list and detail pages -- therefore said
-               * "Ready" while the URL returned 502.
-               *
-               * /healthz is served by Rancher itself, unauthenticated, and only
-               * once its HTTP listener is up, so it is exactly the transition
-               * the ingress cares about. Port 80 because that is the plain-HTTP
-               * listener the Service and Ingress already target.
-               *
-               * Readiness only, deliberately -- NO livenessProbe. A restart
-               * takes k3s through an etcd cluster-reset that can sit silent for
-               * minutes, and a liveness probe would kill the pod mid-recovery
-               * and never let it finish.
-               */
-              readinessProbe: {
-                httpGet:             { path: '/healthz', port: 80 },
-                // Nothing useful can answer before this, and probing through it
-                // just fills the events log with failures.
-                initialDelaySeconds: 30,
-                periodSeconds:       10,
-                timeoutSeconds:      5,
-                // Generous: once serving, a blip should not pull the pod out of
-                // the Service and 503 someone mid-session.
-                failureThreshold:    6,
-              },
-              resources: {
-                requests: { cpu: '1', memory: '3Gi' },
-                limits:   { cpu: '2', memory: '6Gi' },
-              },
-            }],
-            volumes: [
-              { name: 'data', persistentVolumeClaim: { claimName: `${ spec.name }-data` } },
-              { name: 'k3s-config', configMap: { name: k3sConfigName(spec) } },
-            ],
-          },
-        },
-      },
-    },
-  };
-}
 
 /** Name of the ConfigMap carrying the bundle server's nginx config. */
 export const uiNginxConfigName = (spec: RemudaSpec): string => `${ spec.name }-ui-nginx`;
@@ -352,90 +129,6 @@ export function uiNginxConfigManifest(spec: RemudaSpec): ManifestRequest {
   };
 }
 
-export function uiDeploymentManifest(spec: RemudaSpec): ManifestRequest {
-  const selector = { [LABEL_NAME]: spec.name, [LABEL_ROLE]: ROLE_UI };
-
-  return {
-    endpoint: ENDPOINTS.deployment,
-    body:     {
-      apiVersion: 'apps/v1',
-      kind:       'Deployment',
-      metadata:   meta(spec, `${ spec.name }-ui`, ROLE_UI),
-      spec:       {
-        replicas: 1,
-        selector: { matchLabels: selector },
-        strategy: { type: 'Recreate' },
-        template: {
-          metadata: { labels: labelsFor(spec, ROLE_UI) },
-          spec:     {
-            containers: [{
-              name:         'nginx',
-              image:        SERVE_IMAGE,
-              ports:        [{ containerPort: 80, name: 'http' }],
-              // Building into a directory named for the path means /ui-bundle/...
-              // resolves straight off nginx's root with no rewrite rule.
-              volumeMounts: [
-                {
-                  name: 'bundle', mountPath: '/usr/share/nginx/html', readOnly: true
-                },
-                // subPath so the ConfigMap replaces just default.conf rather than
-                // shadowing conf.d and taking the rest of the directory with it.
-                {
-                  name: 'nginx-config', mountPath: NGINX_CONFIG_PATH, subPath: 'default.conf', readOnly: true
-                },
-              ],
-              resources: {
-                requests: { cpu: '10m', memory: '32Mi' },
-                limits:   { cpu: '500m', memory: '256Mi' },
-              },
-            }],
-            volumes: [
-              {
-                name:                  'bundle',
-                persistentVolumeClaim: { claimName: `${ spec.name }-ui`, readOnly: true },
-              },
-              {
-                name:      'nginx-config',
-                configMap: { name: uiNginxConfigName(spec) },
-              },
-            ],
-          },
-        },
-      },
-    },
-  };
-}
-
-function serviceManifest(spec: RemudaSpec, name: string, role: string, ports: any[]): ManifestRequest {
-  return {
-    endpoint: ENDPOINTS.service,
-    body:     {
-      apiVersion: 'v1',
-      kind:       'Service',
-      metadata:   meta(spec, name, role),
-      spec:       {
-        type:     'ClusterIP',
-        selector: { [LABEL_NAME]: spec.name, [LABEL_ROLE]: role },
-        ports,
-      },
-    },
-  };
-}
-
-export const backendServiceManifest = (spec: RemudaSpec) => serviceManifest(spec, spec.name, ROLE_BACKEND, [
-  {
-    name: 'http', port: 80, targetPort: 80
-  },
-  {
-    name: 'https', port: 443, targetPort: 443
-  },
-]);
-
-export const uiServiceManifest = (spec: RemudaSpec) => serviceManifest(spec, `${ spec.name }-ui`, ROLE_UI, [
-  {
-    name: 'http', port: 80, targetPort: 80
-  },
-]);
 
 /**
  * The cert-manager annotation for whichever issuer kind was discovered.
@@ -495,42 +188,6 @@ export function issuerManifest(spec: RemudaSpec, acme: Record<string, any>): Man
   };
 }
 
-export function ingressManifest(spec: RemudaSpec): ManifestRequest {
-  const backend = (name: string) => ({ service: { name, port: { number: 80 } } });
-
-  return {
-    endpoint: ENDPOINTS.ingress,
-    body:     {
-      apiVersion: 'networking.k8s.io/v1',
-      kind:       'Ingress',
-      metadata:   {
-        ...meta(spec, spec.name),
-        ...(spec.clusterIssuer ? { annotations: issuerAnnotations(spec.clusterIssuer, spec.issuerKind) } : {}),
-      },
-      spec: {
-        ingressClassName: spec.ingressClass,
-        rules:            [{
-          host: spec.hostname,
-          http: {
-            paths: [
-              // The bundle path must precede '/', which catches everything else.
-              {
-                path: `/${ UI_BUNDLE_PATH }`, pathType: 'Prefix', backend: backend(`${ spec.name }-ui`)
-              },
-              {
-                path: '/', pathType: 'Prefix', backend: backend(spec.name)
-              },
-            ],
-          },
-        }],
-        // Rancher's own ingress terminates TLS here and talks plain HTTP to port
-        // 80. traefik would otherwise need a ServersTransport CRD to go upstream
-        // over HTTPS, which is why the backend runs with --no-cacerts.
-        ...(spec.clusterIssuer ? { tls: [{ hosts: [spec.hostname], secretName: `${ spec.name }-tls` }] } : {}),
-      },
-    },
-  };
-}
 
 /**
  * Script the probe runs. Answers two questions in one pod, because they are
@@ -717,24 +374,3 @@ export function buildJobManifest(spec: RemudaSpec, buildId: string): ManifestReq
   };
 }
 
-/** Every object for a new environment, in dependency order. */
-export function allManifests(spec: RemudaSpec, password: string, buildId: string): ManifestRequest[] {
-  return [
-    recordManifest(spec),
-    bootstrapSecretManifest(spec, password),
-    k3sConfigManifest(spec),
-    uiNginxConfigManifest(spec),
-    dataPvcManifest(spec),
-    uiPvcManifest(spec),
-    cachePvcManifest(spec),
-    backendServiceManifest(spec),
-    uiServiceManifest(spec),
-    backendDeploymentManifest(spec),
-    uiDeploymentManifest(spec),
-    // Before the Ingress that references it. Only for the mirrored path -- a
-    // ClusterIssuer already exists and is not ours to create.
-    ...(spec.acme ? [issuerManifest(spec, spec.acme)] : []),
-    ingressManifest(spec),
-    buildJobManifest(spec, buildId),
-  ];
-}

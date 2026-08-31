@@ -80,7 +80,6 @@ export const LABEL_ENTRY_PORT = 'remuda.rancher.io/entry-port';
  */
 export const LABEL_ADDRESSES_PINNED = 'remuda.rancher.io/hop-addresses-pinned';
 
-export const ROLE_BACKEND = 'backend';
 export const ROLE_UI = 'ui';
 export const ROLE_BUILD = 'build';
 /** Not an environment's -- the DNS probe belongs to a cluster, not a workload. */
@@ -134,9 +133,6 @@ export const DNS_PROBE_IMAGE = SERVE_IMAGE;
 /** How long to wait for the probe Job to land a verdict before giving up on it. */
 export const DNS_PROBE_TIMEOUT_MS = 25000;
 
-/** Where nginx's stock nginx.conf includes server blocks from. */
-export const NGINX_CONFIG_PATH = '/etc/nginx/conf.d/default.conf';
-
 export const DEFAULT_BACKEND_IMAGE = 'rancher/rancher:head';
 
 /** Registries a Rancher server image is commonly pulled from. */
@@ -165,26 +161,6 @@ export const NESTED_CIDR_CANDIDATES = [
 /** Used when the host cluster's own CIDRs could not be read. */
 export const DEFAULT_NESTED_POD_CIDR = NESTED_CIDR_CANDIDATES[0].podCidr;
 export const DEFAULT_NESTED_SERVICE_CIDR = NESTED_CIDR_CANDIDATES[0].serviceCidr;
-
-/** Where the k3s binary looks for its config file, absent --config. */
-export const K3S_CONFIG_PATH = '/etc/rancher/k3s/config.yaml';
-
-/**
- * inotify limits to raise on the node before a backend starts.
- *
- * fs.inotify.* is counted per-uid across the whole host and is not namespaced,
- * so every nested k3s on a node draws from one budget -- and each of them runs
- * an apiserver, a kubelet and a containerd that all want watches. The stock
- * max_user_instances of 128 is spent quickly, and what fails is the nested
- * containerd's CRI plugin ("failed to create fsnotify watcher: too many open
- * files"), which leaves the nested cluster with no node at all and every pod in
- * it Pending. Because the limit is host-global, this gets worse the more
- * environments a node carries, which is what made it look intermittent.
- */
-export const INOTIFY_LIMITS = {
-  'fs.inotify.max_user_instances': 8192,
-  'fs.inotify.max_user_watches':   524288,
-} as const;
 
 /**
  * Fallback storage for a cluster that provisions none of its own.

@@ -1,9 +1,9 @@
 import {
   CONFIG_MAP_NAME, REMUDA_NS, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME,
 } from './constants';
-import { allManifests, buildJobManifest, namespaceManifest } from './manifests';
+import { buildJobManifest, namespaceManifest } from './manifests';
 import { localPathManifests } from './storage';
-import { hopEndpointSlice, hopManifests, hopName } from './hop';
+import { hopEndpointSlice, hopName } from './hop';
 import type { IngressEntry, RemudaSpec, ManifestRequest } from '../types';
 
 const base = (clusterId: string) => `/k8s/clusters/${ clusterId }/v1`;
@@ -84,69 +84,6 @@ export async function readEnvironments(store: any, clusterId: string): Promise<R
       }
     })
     .filter(Boolean);
-}
-
-/**
- * Create one manifest, treating "already exists" as success.
- *
- * For the objects an environment shares with its neighbours rather than owns --
- * today just the mirrored Issuer, which is one per namespace. The second
- * environment in a namespace would otherwise abort its whole create on the
- * Issuer that the first one quite correctly left behind.
- */
-async function createShared(store: any, clusterId: string, manifest: ManifestRequest): Promise<void> {
-  try {
-    await create(store, clusterId, manifest);
-  } catch (e: any) {
-    if (!/already exists/i.test(e?.message || '')) {
-      throw e;
-    }
-  }
-}
-
-/** Kinds that belong to the namespace rather than to one environment. */
-const SHARED_ENDPOINTS: string[] = [ENDPOINTS.issuer];
-
-export async function createEnvironment(
-  store: any, clusterId: string, spec: RemudaSpec, password: string
-): Promise<void> {
-  await ensureNamespace(store, clusterId, spec.namespace);
-
-  // Sequential: later objects reference earlier ones by name.
-  for (const manifest of allManifests(spec, password, `${ Date.now() }`)) {
-    if (SHARED_ENDPOINTS.includes(manifest.endpoint)) {
-      await createShared(store, clusterId, manifest);
-    } else {
-      await create(store, clusterId, manifest);
-    }
-  }
-
-  await createHop(store, spec);
-}
-
-/**
- * Front a downstream environment from the host cluster.
- *
- * Skipped entirely for a `local` target, where the environment's own Ingress is
- * already on the cluster the wildcard resolves to and a second one would just
- * collide with it.
- */
-export async function createHop(store: any, spec: RemudaSpec): Promise<void> {
-  const manifests = hopManifests(spec);
-
-  if (!manifests.length) {
-    return;
-  }
-
-  await ensureNamespace(store, HOST_CLUSTER_ID, spec.namespace);
-
-  for (const manifest of manifests) {
-    if (SHARED_ENDPOINTS.includes(manifest.endpoint)) {
-      await createShared(store, HOST_CLUSTER_ID, manifest);
-    } else {
-      await create(store, HOST_CLUSTER_ID, manifest);
-    }
-  }
 }
 
 /**
