@@ -13,7 +13,8 @@ import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
 import { useFormValidation } from '@shell/composables/useFormValidation';
 import type { RuleSet } from '@shell/composables/useFormValidation';
 import { useText } from '../utils/i18n';
-import { createEnvironment, hostnameTaken, installLocalPathStorage, readyClusters } from '../utils/api';
+import { hostnameTaken, installLocalPathStorage, readyClusters } from '../utils/api';
+import { controllerAvailable, createEnvironmentCr } from '../utils/environments';
 import {
   backendImageForBranch, discoverDefaults, exposureFor, hostIngressDefaults, hostnameFor, ingressEntry,
   isIpLiteral, isWildcardFallbackDomain, probeBaseDomain, saveDefaults, wildcardDomainFor,
@@ -121,6 +122,8 @@ const issuerKind = ref<IssuerKind | undefined>(undefined);
 const acme = ref<AcmeIssuer | undefined>(undefined);
 const hasStorageClass = ref(true);
 const installingStorage = ref(false);
+/** Whether this Rancher can accept an Environment at all. See controllerAvailable(). */
+const controllerReady = ref(true);
 
 // Where the *target* cluster's ingress controller answers from outside it.
 // Resolved once, at create. Either the address the hop dials (see HopSpec) or,
@@ -283,7 +286,7 @@ const pinnedToAddress = computed(() => usesDirect.value && baseDomain.value.ends
  * reach a downstream environment; now it is simply the reason the create falls
  * back to reaching it directly.
  */
-const canSubmit = computed(() => isFormValid.value && !resolvingExposure.value && !!(
+const canSubmit = computed(() => isFormValid.value && !resolvingExposure.value && controllerReady.value && !!(
   baseDomain.value && ingressClass.value &&
   !storageUnavailable.value && !entryUnavailable.value
 ));
@@ -621,16 +624,20 @@ function buildSpec(): RemudaSpec {
   };
 }
 
-function generatePassword(): string {
-  const bytes = new Uint8Array(24);
-
-  crypto.getRandomValues(bytes);
-
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
 async function submit(cb: (ok: boolean) => void) {
   try {
+    // Nothing reconciles an Environment without the controller, so a create
+    // would leave a record and no environment. Re-probed here rather than
+    // trusted from page load, because installing it is a thing someone may have
+    // just gone and done in another tab.
+    if (!await controllerAvailable(store, HOST_CLUSTER_ID)) {
+      controllerReady.value = false;
+      error.value = i18n.t('remuda.error.controllerMissing');
+      cb(false);
+
+      return;
+    }
+
     // Checked here rather than left to the API because a collision can surface
     // on a cluster the user does not think they are creating anything on --
     // either the host cluster, where a hopped hostname is claimed, or the target
@@ -642,7 +649,7 @@ async function submit(cb: (ok: boolean) => void) {
       return;
     }
 
-    await createEnvironment(store, clusterId.value, buildSpec(), generatePassword());
+    await createEnvironmentCr(store, buildSpec());
     // Persist what was used so the next create on this cluster prefills. The
     // environment already exists by this point, so a failure here must not be
     // reported as a failed create -- prefill is a convenience, not part of the
@@ -694,6 +701,9 @@ async function savePrefillDefaults() {
 
 onMounted(async() => {
   try {
+    // The controller lives on the host cluster whichever cluster the
+    // environment will run on, so this is asked once rather than per target.
+    controllerReady.value = await controllerAvailable(store, HOST_CLUSTER_ID);
     clusters.value = await readyClusters(store);
     // Prefer a downstream cluster; local is discouraged but not blocked.
     clusterId.value = (clusters.value.find((c) => !c.isLocal) || clusters.value[0])?.id || '';
@@ -720,6 +730,11 @@ onMounted(async() => {
       v-if="targetsLocal"
       color="warning"
       :label="i18n.t('remuda.warning.localCluster')"
+    />
+    <Banner
+      v-if="!controllerReady"
+      color="error"
+      :label="i18n.t('remuda.warning.noController')"
     />
     <Banner
       v-if="storageUnavailable"

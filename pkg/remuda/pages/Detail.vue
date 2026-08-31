@@ -8,17 +8,19 @@ import AsyncButton from '@shell/components/AsyncButton.vue';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import {
-  deleteEnvironment, hopAddresses, list, readEnvironments, rebuildUi, resourceUrl, resyncHop,
-  setEnvironmentRunning
+  hopAddresses, list, rebuildUi, resourceUrl, resyncHop
 } from '../utils/api';
 import { ingressEntry } from '../utils/discovery';
 import { hopHasDrifted } from '../utils/hop';
 import { isIncomplete, runStateOf } from '../utils/status';
+import {
+  canRebuild, crIncomplete, crRunState, deleteRecord, findEnvironment, setRecordRunning
+} from '../utils/environments';
 import { environmentUrl, resourceBase, sharedDashboardIndexUrl } from '../utils/manifests';
 import {
   BLANK_CLUSTER, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME, PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
 } from '../utils/constants';
-import type { IngressEntry, RemudaSpec, RunState } from '../types';
+import type { EnvironmentRecord, IngressEntry, RemudaSpec, RunState } from '../types';
 
 const store = useStore();
 const route = useRoute();
@@ -31,6 +33,10 @@ const envName = route.params.name as string;
 const loading = ref(true);
 const error = ref('');
 const spec = ref<RemudaSpec | null>(null);
+/** Kept alongside spec so the actions know which record they are acting on. */
+const record = ref<EnvironmentRecord | null>(null);
+/** Rebuild has no CR equivalent yet -- the controller builds once. */
+const rebuildable = computed(() => !!record.value && canRebuild(record.value));
 const password = ref('');
 const revealed = ref(false);
 const runState = ref<RunState>('pending');
@@ -124,10 +130,10 @@ async function loadPassword(env: RemudaSpec) {
 
 async function load() {
   try {
-    const specs = await readEnvironments(store, clusterId);
-    const found = specs.find((s) => s.name === envName) || null;
+    const found = await findEnvironment(store, clusterId, envName);
 
-    spec.value = found;
+    record.value = found || null;
+    spec.value = found?.spec || null;
 
     if (!found) {
       error.value = i18n.t('remuda.error.loadFailed');
@@ -140,17 +146,25 @@ async function load() {
       list(store, clusterId, ENDPOINTS.job).catch(() => ({ data: [] })),
     ]);
 
-    const backend = (deployments.data || []).find((d: any) => d.metadata?.name === found.name);
+    const backend = (deployments.data || []).find((d: any) => d.metadata?.name === found.spec.name);
 
-    hasBackend.value = !!backend;
-    runState.value = runStateOf(backend);
-    jobs.value = (allJobs.data || []).filter((j: any) => j.metadata?.labels?.[LABEL_NAME] === found.name);
+    // The controller writes the same objects with the same labels, so build
+    // history reads identically either way. Only run state and completeness come
+    // from the CR, because it reports them directly instead of being inferred.
+    hasBackend.value = found.source === 'cr' ? !crIncomplete(found.cr!) : !!backend;
+    runState.value = found.source === 'cr' ? crRunState(found.cr!) : runStateOf(backend);
+    jobs.value = (allJobs.data || []).filter((j: any) => j.metadata?.labels?.[LABEL_NAME] === found.spec.name);
 
     if (!password.value) {
-      await loadPassword(found);
+      await loadPassword(found.spec);
     }
 
-    await refreshHop(found);
+    // The controller reconciles a CR's hop on its own schedule, so the page has
+    // nothing to repair -- and rewriting the EndpointSlice from here would race
+    // the thing that owns it.
+    if (found.source === 'legacy') {
+      await refreshHop(found.spec);
+    }
   } catch (e: any) {
     error.value = e?.message || i18n.t('remuda.error.loadFailed');
   } finally {
@@ -239,7 +253,7 @@ async function rebuild(cb: (ok: boolean) => void) {
  */
 async function setRunning(running: boolean, cb: (ok: boolean) => void) {
   try {
-    await setEnvironmentRunning(store, clusterId, spec.value as RemudaSpec, running);
+    await setRecordRunning(store, clusterId, record.value as EnvironmentRecord, running);
     await load();
     cb(true);
   } catch (e: any) {
@@ -253,7 +267,7 @@ const stop = (cb: (ok: boolean) => void) => setRunning(false, cb);
 
 async function remove(cb: (ok: boolean) => void) {
   try {
-    await deleteEnvironment(store, clusterId, spec.value as RemudaSpec);
+    await deleteRecord(store, clusterId, record.value as EnvironmentRecord);
     cb(true);
     router.push({ name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } });
   } catch (e: any) {
@@ -443,7 +457,13 @@ onUnmounted(() => clearInterval(timer));
           did nothing, so this button read "Apply" on a page where that means
           nothing to anyone.
         -->
+        <!--
+          Hidden rather than disabled for a CR-backed environment: the controller
+          builds once and has no rebuild trigger yet, so there is nothing to
+          explain by showing a control that cannot work.
+        -->
         <AsyncButton
+          v-if="rebuildable"
           mode="apply"
           :action-label="i18n.t('remuda.detail.rebuild')"
           :waiting-label="i18n.t('remuda.detail.rebuilding')"

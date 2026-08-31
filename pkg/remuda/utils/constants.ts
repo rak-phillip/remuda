@@ -8,6 +8,18 @@ export const REMUDA_NS = 'rancher-remuda';
 export const CONFIG_MAP_NAME = 'remuda-config';
 
 /**
+ * The Environment CRD, and the extension's readiness test for the controller.
+ *
+ * The CRD is what the create path depends on, so it -- not the controller's
+ * Deployment -- is what gets probed. A cluster with the CRD registered can
+ * accept an Environment even while the controller is restarting; a cluster
+ * without it cannot, whatever else is running.
+ */
+export const ENVIRONMENT_CRD = 'environments.remuda.rancher.io';
+export const ENVIRONMENT_API_VERSION = 'remuda.rancher.io/v1alpha1';
+export const ENVIRONMENT_KIND = 'Environment';
+
+/**
  * The Issuer Remuda creates in its own namespace when the cluster has no
  * ClusterIssuer.
  *
@@ -250,4 +262,10 @@ export const ENDPOINTS = {
   daemonset:             'apps.daemonsets',
   endpointslice:         'discovery.k8s.io.endpointslices',
   serverstransport:      'traefik.io.serverstransports',
+
+  // Steve flattens a CRD to <group>.<plural> exactly like any built-in type, so
+  // the Environment API needs no special client -- it is the same `list`,
+  // `create` and `remove` used for everything else here.
+  environment:              'remuda.rancher.io.environments',
+  customresourcedefinition: 'apiextensions.k8s.io.customresourcedefinitions',
 } as const;

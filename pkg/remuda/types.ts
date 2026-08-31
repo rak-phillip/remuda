@@ -159,6 +159,70 @@ export interface RemudaSpec {
   nestedServiceCidr: string;
 }
 
+/**
+ * Where an environment's record lives, and therefore who provisions it.
+ *
+ * `cr` is an Environment custom resource reconciled by remuda-controller.
+ * `legacy` is an environment created by an older extension, whose record is a
+ * ConfigMap and whose objects were written straight from the browser.
+ *
+ * Both are real, both stay manageable, and only the *operations* differ -- the
+ * pages read one shape either way. When no legacy environments remain anywhere,
+ * this type collapses to `cr` and the TypeScript provisioning path goes with it.
+ */
+export type EnvironmentSource = 'cr' | 'legacy';
+
+/** Status subresource of an Environment. Fact, as opposed to spec's intent. */
+export interface EnvironmentStatus {
+  /** What the controller resolved every unpinned spec field to. */
+  resolved?: Partial<RemudaSpec> & { exposure?: Exposure };
+  conditions?: { type: string; status: string; reason?: string; message?: string }[];
+  /**
+   * The controller's vocabulary, which is capitalised and deliberately not the
+   * UI's. `Unknown` has no lowercase counterpart that means the same thing: it
+   * is what a Fleet-delivered environment reports because Fleet tracks
+   * Deployments and PVCs but not Jobs, so the build state is unobservable
+   * rather than merely not yet known. Mapped in crBuildState().
+   */
+  build?: 'Unknown' | 'Building' | 'Ready' | 'Failed';
+  run?: 'Pending' | 'Ready' | 'Stopped' | 'Stopping';
+  buildId?: string;
+  url?: string;
+  sharedBundleUrl?: string;
+  bootstrapSecret?: string;
+  observedGeneration?: number;
+}
+
+/** An Environment custom resource as Steve returns it. */
+export interface EnvironmentCR {
+  apiVersion?: string;
+  kind?: string;
+  metadata: {
+    name: string;
+    namespace: string;
+    creationTimestamp?: string;
+    labels?: Record<string, string>;
+    [key: string]: any;
+  };
+  spec: Partial<RemudaSpec> & { repo: string; branch: string; running?: boolean };
+  status?: EnvironmentStatus;
+}
+
+/**
+ * One environment as the pages consume it, whichever way it was made.
+ *
+ * `spec` is the same RemudaSpec the UI has always rendered, so list and detail
+ * need no knowledge of provenance to display an environment -- only to act on
+ * one. For a CR that spec is assembled from status.resolved over spec, because
+ * resolved is what the environment was actually built with.
+ */
+export interface EnvironmentRecord {
+  source: EnvironmentSource;
+  spec: RemudaSpec;
+  /** Present only when source is 'cr'. The authority for status. */
+  cr?: EnvironmentCR;
+}
+
 /** Per-cluster defaults, discovered then persisted so later creates prefill. */
 export interface ClusterDefaults {
   baseDomain: string;
@@ -201,6 +265,8 @@ export type RunState = 'ready' | 'pending' | 'stopped' | 'stopping';
 /** A dev environment as presented in the list, merged from several resources. */
 export interface RemudaSummary {
   spec: RemudaSpec;
+  /** Which record backs it, and therefore how it is started and deleted. */
+  source: EnvironmentSource;
   clusterId: string;
   clusterName: string;
   runState: RunState;

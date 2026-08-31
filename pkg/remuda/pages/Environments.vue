@@ -10,12 +10,13 @@ import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { buildStateOf, isIncomplete, runStateOf } from '../utils/status';
+import { list, readyClusters } from '../utils/api';
 import {
-  deleteEnvironment, list, readEnvironments, readyClusters, setEnvironmentRunning
-} from '../utils/api';
+  crBuildState, crIncomplete, crRunState, deleteRecord, listEnvironments, setRecordRunning
+} from '../utils/environments';
 import { environmentUrl } from '../utils/manifests';
 import { BLANK_CLUSTER, ENDPOINTS, PRODUCT_NAME } from '../utils/constants';
-import type { RemudaSummary } from '../types';
+import type { EnvironmentRecord, RemudaSummary } from '../types';
 
 const store = useStore();
 const router = useRouter();
@@ -28,29 +29,55 @@ const error = ref('');
 const rows = ref<RemudaSummary[]>([]);
 let timer: any = null;
 
+/**
+ * Both records, rendered identically.
+ *
+ * A CR reports its own state, so its row costs no extra reads. A legacy
+ * environment has no status to report and its state is still derived from the
+ * Deployments and Jobs -- which is why those two collections are fetched only
+ * when there is a legacy environment left to need them.
+ */
 async function loadCluster(cluster: { id: string; name: string }): Promise<RemudaSummary[]> {
-  const specs = await readEnvironments(store, cluster.id);
+  const records = await listEnvironments(store, cluster.id);
 
-  if (!specs.length) {
+  if (!records.length) {
     return [];
   }
 
-  const [deployments, jobs] = await Promise.all([
+  const needsWorkloads = records.some((r) => r.source === 'legacy');
+
+  const [deployments, jobs] = needsWorkloads ? await Promise.all([
     list(store, cluster.id, ENDPOINTS.deployment).catch(() => ({ data: [] })),
     list(store, cluster.id, ENDPOINTS.job).catch(() => ({ data: [] })),
-  ]);
+  ]) : [{ data: [] }, { data: [] }];
 
-  return specs.map((spec) => {
+  return records.map((record) => {
+    const { spec } = record;
+    const common = {
+      spec,
+      source:      record.source,
+      clusterId:   cluster.id,
+      clusterName: cluster.name,
+      url:         environmentUrl(spec),
+    };
+
+    if (record.source === 'cr' && record.cr) {
+      return {
+        ...common,
+        runState:   crRunState(record.cr),
+        buildState: crBuildState(record.cr),
+        incomplete: crIncomplete(record.cr),
+        url:        record.cr.status?.url || common.url,
+      };
+    }
+
     const backend = (deployments.data || []).find((d: any) => d.metadata?.name === spec.name);
 
     return {
-      spec,
-      clusterId:   cluster.id,
-      clusterName: cluster.name,
-      runState:    runStateOf(backend),
-      buildState:  buildStateOf(jobs.data || [], spec.name),
-      incomplete:  isIncomplete(spec, !!backend),
-      url:         environmentUrl(spec),
+      ...common,
+      runState:   runStateOf(backend),
+      buildState: buildStateOf(jobs.data || [], spec.name),
+      incomplete: isIncomplete(spec, !!backend),
     };
   });
 }
@@ -69,6 +96,13 @@ async function load() {
     loading.value = false;
   }
 }
+
+/**
+ * The row carries provenance but not the CR itself: both operations address the
+ * environment by name and re-read it, so keeping a copy would only give them a
+ * stale one.
+ */
+const recordFor = (row: RemudaSummary): EnvironmentRecord => ({ source: row.source, spec: row.spec });
 
 function askDelete(row: RemudaSummary) {
   pendingDelete.value = row;
@@ -94,7 +128,7 @@ function confirmRemove(cb: (ok: boolean) => void) {
  */
 async function setRunning(row: RemudaSummary, running: boolean, cb: (ok: boolean) => void) {
   try {
-    await setEnvironmentRunning(store, row.clusterId, row.spec, running);
+    await setRecordRunning(store, row.clusterId, recordFor(row), running);
     await load();
     cb(true);
   } catch (e: any) {
@@ -105,7 +139,7 @@ async function setRunning(row: RemudaSummary, running: boolean, cb: (ok: boolean
 
 async function remove(row: RemudaSummary, cb: (ok: boolean) => void) {
   try {
-    await deleteEnvironment(store, row.clusterId, row.spec);
+    await deleteRecord(store, row.clusterId, recordFor(row));
     await load();
     cb(true);
   } catch (e: any) {

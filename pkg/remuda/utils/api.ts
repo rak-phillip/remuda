@@ -19,6 +19,9 @@ export function collectionUrl(clusterId: string, endpoint: string, namespace = R
 
 export const resourceUrl = (clusterId: string, endpoint: string, namespace: string, name: string): string => `${ base(clusterId) }/${ endpoint }/${ namespace }/${ name }`;
 
+/** A cluster-scoped resource, which has no namespace segment at all. */
+export const clusterResourceUrl = (clusterId: string, endpoint: string, name: string): string => `${ base(clusterId) }/${ endpoint }/${ name }`;
+
 export function list(store: any, clusterId: string, endpoint: string, namespace = REMUDA_NS): Promise<any> {
   return store.dispatch('management/request', { url: collectionUrl(clusterId, endpoint, namespace) });
 }
