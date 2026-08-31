@@ -73,8 +73,12 @@ export function crRunState(cr: EnvironmentCR): RunState {
  * is actively reconciling.
  */
 export async function listEnvironments(store: any, clusterId: string): Promise<EnvironmentRecord[]> {
+  // A legacy record lives on the cluster its environment runs on; a CR always
+  // lives on the host, whatever `spec.clusterId` targets. So the CRs are read
+  // once, on the host pass, rather than once per cluster -- and a caller
+  // walking every cluster gets each environment exactly once.
   const [crs, legacy] = await Promise.all([
-    listEnvironmentCrs(store, clusterId),
+    clusterId === HOST_CLUSTER_ID ? listEnvironmentCrs(store) : Promise.resolve([]),
     readEnvironments(store, clusterId),
   ]);
 
@@ -102,7 +106,7 @@ export async function listEnvironments(store: any, clusterId: string): Promise<E
  * controller, not an error worth surfacing -- the create form reports that, and
  * a list has nothing useful to say about it.
  */
-export async function listEnvironmentCrs(store: any, clusterId: string): Promise<EnvironmentCR[]> {
+export async function listEnvironmentCrs(store: any, clusterId = HOST_CLUSTER_ID): Promise<EnvironmentCR[]> {
   try {
     const res = await list(store, clusterId, ENDPOINTS.environment);
 

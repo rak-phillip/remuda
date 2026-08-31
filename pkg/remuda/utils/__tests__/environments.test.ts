@@ -149,6 +149,28 @@ describe('listEnvironments', () => {
     expect(records[0].source).toBe('cr');
   });
 
+  it('reads CRs only on the host pass, so a walk of every cluster lists each once', async() => {
+    // A legacy record lives on the cluster its environment runs on, but a CR
+    // always lives on the host whatever spec.clusterId targets. Reading CRs per
+    // cluster would list every CR-backed environment once per cluster.
+    const store = storeWith([cr()], []);
+    const asked: string[] = [];
+    const spy = {
+      dispatch: (a: string, req: any) => {
+        asked.push(req.url);
+
+        return store.dispatch(a, req);
+      },
+    };
+
+    const downstream = await listEnvironments(spy, 'c-m-dff2ssd2');
+
+    expect(downstream).toEqual([]);
+    expect(asked.some((u) => u.includes('remuda.rancher.io.environments'))).toBe(false);
+
+    expect(await listEnvironments(store, 'local')).toHaveLength(1);
+  });
+
   it('still lists legacy environments on a cluster with no CRD', async() => {
     // This is the ordinary state of every cluster that has not installed the
     // controller, and the whole point of the compatibility window.

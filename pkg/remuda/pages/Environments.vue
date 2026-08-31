@@ -71,6 +71,10 @@ async function loadCluster(cluster: { id: string; name: string }): Promise<Remud
     if (record.source === 'cr' && record.cr) {
       return {
         ...common,
+        // The CR lives on the host; the workload does not. Everything that
+        // addresses the environment -- the detail route, the workload lookups
+        // there -- needs the cluster it actually runs on.
+        clusterId:  spec.clusterId || cluster.id,
         runState:   crRunState(record.cr),
         buildState: crBuildState(record.cr),
         incomplete: crIncomplete(record.cr),
@@ -95,7 +99,15 @@ async function load() {
     // One cluster failing to answer must not blank the whole list.
     const results = await Promise.all(clusters.map((c) => loadCluster(c).catch(() => [])));
 
-    rows.value = results.flat();
+    const named = results.flat();
+
+    // Resolved after the flatten because a CR row's cluster is only known from
+    // its spec, and may be a cluster other than the one it was listed under.
+    for (const row of named) {
+      row.clusterName = clusters.find((c) => c.id === row.clusterId)?.name || row.clusterId;
+    }
+
+    rows.value = named;
     // After the rows, and never allowed to fail the load: a list of environments
     // with raw owner IDs is far better than no list.
     owners.value = await ownerNames(store, rows.value.map((r) => r.spec.owner));
