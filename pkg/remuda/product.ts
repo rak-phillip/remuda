@@ -25,7 +25,7 @@ export function init($plugin: IPlugin, store: any) {
     to:                  route('environments'),
   });
 
-  basicType(['environments', 'create']);
+  basicType(['environments']);
 
   virtualType({
     label:      store.getters['i18n/t']('remuda.nav.environments'),
@@ -33,13 +33,5 @@ export function init($plugin: IPlugin, store: any) {
     namespaced: false,
     weight:     20,
     route:      route('environments'),
-  });
-
-  virtualType({
-    label:      store.getters['i18n/t']('remuda.nav.create'),
-    name:       'create',
-    namespaced: false,
-    weight:     10,
-    route:      route('create'),
   });
 }

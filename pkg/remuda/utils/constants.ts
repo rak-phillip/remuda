@@ -4,6 +4,16 @@ export const BLANK_CLUSTER = '_';
 /** Namespace that holds every dev environment on a given host cluster. */
 export const REMUDA_NS = 'rancher-remuda';
 
+/**
+ * The account the bootstrap password belongs to.
+ *
+ * Rancher's own bootstrap creates it from CATTLE_BOOTSTRAP_PASSWORD, so this is
+ * fixed rather than configurable. It is a constant because the detail page has
+ * to *print* it: handing someone a password without naming the account is what
+ * locked the first real user out of his own environment.
+ */
+export const BOOTSTRAP_USERNAME = 'admin';
+
 /** ConfigMap holding the per-cluster defaults discovered on first create. */
 export const CONFIG_MAP_NAME = 'remuda-config';
 

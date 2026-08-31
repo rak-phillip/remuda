@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { useStore } from 'vuex';
 import AppModal from '@shell/components/AppModal.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
+import RcButton from '@components/RcButton/RcButton.vue';
 import { useText } from '../utils/i18n';
 
 /**
@@ -55,13 +56,12 @@ defineExpose({ show });
       <p>{{ i18n.t('remuda.confirmDelete.body') }}</p>
 
       <div class="remuda-confirm-actions">
-        <button
-          type="button"
-          class="btn role-secondary"
+        <RcButton
+          variant="secondary"
           @click="close"
         >
           {{ i18n.t('remuda.confirmDelete.cancel') }}
-        </button>
+        </RcButton>
         <AsyncButton
           mode="delete"
           @click="confirm"

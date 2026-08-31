@@ -15,6 +15,7 @@ import {
   crBuildState, crIncomplete, crRunState, deleteRecord, listEnvironments, setRecordRunning
 } from '../utils/environments';
 import { environmentUrl } from '../utils/manifests';
+import { relativeAge } from '../utils/age';
 import { BLANK_CLUSTER, ENDPOINTS, PRODUCT_NAME } from '../utils/constants';
 import type { EnvironmentRecord, RemudaSummary } from '../types';
 
@@ -191,12 +192,12 @@ onUnmounted(() => clearInterval(timer));
   <div v-else>
     <header class="remuda-header">
       <h1>{{ i18n.t('remuda.list.title') }}</h1>
-      <button
-        class="btn role-primary"
+      <RcButton
+        variant="primary"
         @click="goCreate"
       >
         {{ i18n.t('remuda.list.createAction') }}
-      </button>
+      </RcButton>
     </header>
     <p class="text-muted mb-20">
       {{ i18n.t('remuda.list.subtitle') }}
@@ -239,6 +240,7 @@ onUnmounted(() => clearInterval(timer));
           <th>{{ i18n.t('remuda.list.columns.cluster') }}</th>
           <th>{{ i18n.t('remuda.list.columns.branch') }}</th>
           <th>{{ i18n.t('remuda.list.columns.owner') }}</th>
+          <th>{{ i18n.t('remuda.list.columns.age') }}</th>
           <th>{{ i18n.t('remuda.list.columns.backend') }}</th>
           <th>{{ i18n.t('remuda.list.columns.build') }}</th>
           <th>{{ i18n.t('remuda.list.columns.url') }}</th>
@@ -259,6 +261,7 @@ onUnmounted(() => clearInterval(timer));
           <td>{{ row.clusterName }}</td>
           <td><code>{{ row.spec.branch }}</code></td>
           <td>{{ row.spec.owner }}</td>
+          <td>{{ relativeAge(row.spec.createdAt) }}</td>
           <td>
             <span
               v-if="row.incomplete"

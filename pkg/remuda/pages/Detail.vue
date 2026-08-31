@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
+import RcButton from '@components/RcButton/RcButton.vue';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import {
@@ -19,6 +20,7 @@ import {
 import { environmentUrl, resourceBase, sharedDashboardIndexUrl } from '../utils/manifests';
 import {
   BLANK_CLUSTER, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME, PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
+  BOOTSTRAP_USERNAME
 } from '../utils/constants';
 import type { EnvironmentRecord, IngressEntry, RemudaSpec, RunState } from '../types';
 
@@ -313,6 +315,10 @@ onUnmounted(() => clearInterval(timer));
         :label="i18n.t('remuda.detail.stoppingHint')"
       />
 
+      <p class="text-muted">
+        {{ i18n.t('remuda.detail.isolated') }}
+      </p>
+
       <h3>{{ i18n.t('remuda.detail.access') }}</h3>
       <dl class="remuda-facts">
         <dt>{{ i18n.t('remuda.detail.url') }}</dt>
@@ -324,22 +330,36 @@ onUnmounted(() => clearInterval(timer));
           >{{ url }}</a>
         </dd>
 
+        <dt>{{ i18n.t('remuda.detail.username') }}</dt>
+        <dd>
+          <code>{{ BOOTSTRAP_USERNAME }}</code>
+          <RcButton
+            variant="link"
+            size="small"
+            @click="copy(BOOTSTRAP_USERNAME)"
+          >
+            Copy
+          </RcButton>
+        </dd>
+
         <dt>{{ i18n.t('remuda.detail.password') }}</dt>
         <dd>
           <code v-if="revealed">{{ password }}</code>
           <code v-else>••••••••••••</code>
-          <button
-            class="btn btn-sm role-link"
+          <RcButton
+            variant="link"
+            size="small"
             @click="revealed = !revealed"
           >
             {{ revealed ? 'Hide' : 'Show' }}
-          </button>
-          <button
-            class="btn btn-sm role-link"
+          </RcButton>
+          <RcButton
+            variant="link"
+            size="small"
             @click="copy(password)"
           >
             Copy
-          </button>
+          </RcButton>
         </dd>
 
         <dt>{{ i18n.t('remuda.list.columns.backend') }}</dt>
@@ -388,12 +408,13 @@ onUnmounted(() => clearInterval(timer));
           <dt>{{ i18n.t('remuda.detail.shareIndex') }}</dt>
           <dd>
             <code>{{ indexUrl }}</code>
-            <button
-              class="btn btn-sm role-link"
+            <RcButton
+              variant="link"
+              size="small"
               @click="copy(indexUrl)"
             >
               Copy
-            </button>
+            </RcButton>
           </dd>
         </dl>
       </template>
@@ -448,6 +469,18 @@ onUnmounted(() => clearInterval(timer));
 
       <p class="text-muted">
         {{ i18n.t('remuda.detail.buildLogHint') }}
+      </p>
+
+      <!--
+        Stop sits beside Delete, so an unexplained verb reads as destructive.
+        The promise it makes is the same one `stopped` makes afterwards; saying
+        it here is what lets someone decide rather than find out.
+      -->
+      <p
+        v-if="runState === 'ready' || runState === 'pending'"
+        class="text-muted"
+      >
+        {{ i18n.t('remuda.detail.stopHint') }}
       </p>
 
       <div class="remuda-actions">

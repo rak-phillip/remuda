@@ -4,7 +4,6 @@ product:
 remuda:
   nav:
     environments: Environments
-    create: Create
 
   list:
     title: Dev Environments
@@ -112,7 +111,16 @@ remuda:
     title: Dev Environment
     access: Access
     url: URL
+    username: Username
     password: Bootstrap password
+    isolated: >-
+      This is a self-contained Rancher running in its own nested cluster.
+      Anything you create inside it stays inside it and cannot affect the cluster
+      hosting it.
+    stopHint: >-
+      Stopping shuts the environment down without losing it. Its volumes,
+      hostname and bootstrap password are kept, so starting it gives back the
+      same instance.
     source: Source
     backendImage: Backend image
     rebuild: Rebuild UI
