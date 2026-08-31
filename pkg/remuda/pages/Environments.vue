@@ -16,6 +16,7 @@ import {
 } from '../utils/environments';
 import { environmentUrl } from '../utils/manifests';
 import { relativeAge } from '../utils/age';
+import { ownerLabel, ownerNames } from '../utils/owners';
 import { BLANK_CLUSTER, ENDPOINTS, PRODUCT_NAME } from '../utils/constants';
 import type { EnvironmentRecord, RemudaSummary } from '../types';
 
@@ -28,6 +29,11 @@ const pendingDelete = ref<RemudaSummary | null>(null);
 const loading = ref(true);
 const error = ref('');
 const rows = ref<RemudaSummary[]>([]);
+/**
+ * Owner IDs resolved to names, best-effort. Empty is the honest answer for a
+ * user who cannot list users, and the column falls back to the ID.
+ */
+const owners = ref<Record<string, string>>({});
 let timer: any = null;
 
 /**
@@ -90,6 +96,9 @@ async function load() {
     const results = await Promise.all(clusters.map((c) => loadCluster(c).catch(() => [])));
 
     rows.value = results.flat();
+    // After the rows, and never allowed to fail the load: a list of environments
+    // with raw owner IDs is far better than no list.
+    owners.value = await ownerNames(store, rows.value.map((r) => r.spec.owner));
     error.value = '';
   } catch (e: any) {
     error.value = e?.message || i18n.t('remuda.error.loadFailed');
@@ -260,7 +269,7 @@ onUnmounted(() => clearInterval(timer));
           </td>
           <td>{{ row.clusterName }}</td>
           <td><code>{{ row.spec.branch }}</code></td>
-          <td>{{ row.spec.owner }}</td>
+          <td>{{ ownerLabel(row.spec.owner, owners) }}</td>
           <td>{{ relativeAge(row.spec.createdAt) }}</td>
           <td>
             <span
