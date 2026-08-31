@@ -2,8 +2,8 @@ apiVersion: v2
 name: remuda-controller
 description: Keeps Remuda's cross-cluster hop pointing at current downstream node addresses.
 type: application
-version: 0.2.0-rc.5
-appVersion: "0.2.0-rc.5"
+version: 0.2.0-rc.6
+appVersion: "0.2.0-rc.6"
 home: https://github.com/rak-phillip/remuda
 sources:
   - https://github.com/rak-phillip/remuda
