@@ -6,6 +6,7 @@ import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
 import RcButton from '@components/RcButton/RcButton.vue';
+import { RcDropdown, RcDropdownItem, RcDropdownTrigger } from '@components/RcDropdown';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
 import {
@@ -217,6 +218,8 @@ async function refreshHop(env: RemudaSpec) {
     // failed should not replace whatever the user is currently reading.
   }
 }
+
+const resyncFromMenu = () => resync(() => {});
 
 async function resync(cb: (ok: boolean) => void) {
   try {
@@ -485,24 +488,35 @@ onUnmounted(() => clearInterval(timer));
 
       <div class="remuda-actions">
         <!--
-          AsyncButton has no `label` prop -- it takes a label per phase, and
-          otherwise falls back to asyncButton.<mode>.<phase>. Passing `label`
-          did nothing, so this button read "Apply" on a page where that means
-          nothing to anyone.
+          Ordered left to right as overflow, secondary, primary, so the primary
+          action lands closest to the right edge the row is aligned to.
         -->
-        <!--
-          Hidden rather than disabled for a CR-backed environment: the controller
-          builds once and has no rebuild trigger yet, so there is nothing to
-          explain by showing a control that cannot work.
-        -->
-        <AsyncButton
-          v-if="rebuildable"
-          mode="apply"
-          :action-label="i18n.t('remuda.detail.rebuild')"
-          :waiting-label="i18n.t('remuda.detail.rebuilding')"
-          :success-label="i18n.t('remuda.detail.rebuild')"
-          @click="rebuild"
-        />
+        <RcDropdown>
+          <RcDropdownTrigger
+            variant="tertiary"
+            :aria-label="i18n.t('remuda.detail.moreActions')"
+          >
+            <i class="icon icon-actions" />
+          </RcDropdownTrigger>
+          <template #dropdownCollection>
+            <RcDropdownItem
+              v-if="hop"
+              @click="resyncFromMenu"
+            >
+              {{ i18n.t('remuda.detail.resync') }}
+            </RcDropdownItem>
+            <!--
+              Delete keeps its confirmation rather than gaining weight from
+              being a button: the modal is what makes it deliberate, and it was
+              never really asynchronous here -- the old AsyncButton reported
+              success immediately and then opened the dialog.
+            -->
+            <RcDropdownItem @click="confirmDelete?.show()">
+              {{ i18n.t('remuda.detail.delete') }}
+            </RcDropdownItem>
+          </template>
+        </RcDropdown>
+
         <AsyncButton
           v-if="runState === 'ready' || runState === 'pending'"
           mode="apply"
@@ -527,17 +541,14 @@ onUnmounted(() => clearInterval(timer));
           :disabled="runState === 'stopping'"
           @click="start"
         />
+
         <AsyncButton
-          v-if="hop"
+          v-if="rebuildable"
           mode="apply"
-          :action-label="i18n.t('remuda.detail.resync')"
-          :waiting-label="i18n.t('remuda.detail.resyncing')"
-          :success-label="i18n.t('remuda.detail.resync')"
-          @click="resync"
-        />
-        <AsyncButton
-          mode="delete"
-          @click="(cb) => { cb(true); confirmDelete?.show(); }"
+          :action-label="i18n.t('remuda.detail.rebuild')"
+          :waiting-label="i18n.t('remuda.detail.rebuilding')"
+          :success-label="i18n.t('remuda.detail.rebuild')"
+          @click="rebuild"
         />
       </div>
 
@@ -568,6 +579,8 @@ onUnmounted(() => clearInterval(timer));
 
 .remuda-actions {
   display: flex;
+  justify-content: flex-end;
+  align-items: center;
   gap: 10px;
   margin-top: 20px;
 }

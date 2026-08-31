@@ -215,6 +215,7 @@ onUnmounted(() => clearInterval(timer));
       <h1>{{ i18n.t('remuda.list.title') }}</h1>
       <RcButton
         variant="primary"
+        size="medium"
         @click="goCreate"
       >
         {{ i18n.t('remuda.list.createAction') }}

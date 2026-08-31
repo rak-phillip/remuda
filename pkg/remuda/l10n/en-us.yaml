@@ -126,6 +126,7 @@ remuda:
     copy: Copy
     show: Show
     hide: Hide
+    moreActions: More actions
     rebuild: Rebuild UI
     rebuilding: Rebuilding
     start: Start
