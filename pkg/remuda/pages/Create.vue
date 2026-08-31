@@ -14,7 +14,12 @@ import { useFormValidation } from '@shell/composables/useFormValidation';
 import type { RuleSet } from '@shell/composables/useFormValidation';
 import { useText } from '../utils/i18n';
 import { hostnameTaken, installLocalPathStorage, readyClusters } from '../utils/api';
-import { controllerAvailable, createEnvironmentCr } from '../utils/environments';
+import { createEnvironmentCr } from '../utils/environments';
+import {
+  canInstallController, controllerAvailable, findControllerChart, installController,
+  waitForController
+} from '../utils/controller';
+import type { ControllerChart } from '../utils/controller';
 import {
   backendImageForBranch, discoverDefaults, exposureFor, hostIngressDefaults, hostnameFor, ingressEntry,
   isIpLiteral, isWildcardFallbackDomain, probeBaseDomain, saveDefaults, wildcardDomainFor,
@@ -124,6 +129,20 @@ const hasStorageClass = ref(true);
 const installingStorage = ref(false);
 /** Whether this Rancher can accept an Environment at all. See controllerAvailable(). */
 const controllerReady = ref(true);
+/** The chart to install when it cannot, and whether this user is allowed to. */
+const controllerChart = ref<ControllerChart | null>(null);
+const controllerAllowed = ref(false);
+const installingController = ref(false);
+
+/**
+ * Installing the controller is folded into Create rather than offered as its
+ * own task. It is still a cluster-wide change and still needs a deliberate
+ * click -- but it is the click the user was already making, on a mutation they
+ * asked for, rather than a detour out of Remuda and back.
+ */
+const willInstallController = computed(() => !controllerReady.value && !!controllerChart.value && controllerAllowed.value);
+/** Nothing here can fix this one: it needs a cluster-admin, or a repository. */
+const controllerBlocked = computed(() => !controllerReady.value && !willInstallController.value);
 
 // Where the *target* cluster's ingress controller answers from outside it.
 // Resolved once, at create. Either the address the hop dials (see HopSpec) or,
@@ -286,7 +305,7 @@ const pinnedToAddress = computed(() => usesDirect.value && baseDomain.value.ends
  * reach a downstream environment; now it is simply the reason the create falls
  * back to reaching it directly.
  */
-const canSubmit = computed(() => isFormValid.value && !resolvingExposure.value && controllerReady.value && !!(
+const canSubmit = computed(() => isFormValid.value && !resolvingExposure.value && !controllerBlocked.value && !installingController.value && !!(
   baseDomain.value && ingressClass.value &&
   !storageUnavailable.value && !entryUnavailable.value
 ));
@@ -627,15 +646,38 @@ function buildSpec(): RemudaSpec {
 async function submit(cb: (ok: boolean) => void) {
   try {
     // Nothing reconciles an Environment without the controller, so a create
-    // would leave a record and no environment. Re-probed here rather than
-    // trusted from page load, because installing it is a thing someone may have
-    // just gone and done in another tab.
+    // would leave a record and no environment. Re-probed rather than trusted
+    // from page load, because someone may have installed it in another tab.
     if (!await controllerAvailable(store, HOST_CLUSTER_ID)) {
-      controllerReady.value = false;
-      error.value = i18n.t('remuda.error.controllerMissing');
-      cb(false);
+      if (!controllerChart.value || !controllerAllowed.value) {
+        controllerReady.value = false;
+        error.value = i18n.t('remuda.error.controllerMissing');
+        cb(false);
 
-      return;
+        return;
+      }
+
+      installingController.value = true;
+
+      try {
+        await installController(store, controllerChart.value);
+
+        if (!await waitForController(store)) {
+          error.value = i18n.t('remuda.error.controllerInstallTimeout');
+          cb(false);
+
+          return;
+        }
+
+        controllerReady.value = true;
+      } catch (e: any) {
+        error.value = e?.message || i18n.t('remuda.error.controllerInstallFailed');
+        cb(false);
+
+        return;
+      } finally {
+        installingController.value = false;
+      }
     }
 
     // Checked here rather than left to the API because a collision can surface
@@ -704,6 +746,15 @@ onMounted(async() => {
     // The controller lives on the host cluster whichever cluster the
     // environment will run on, so this is asked once rather than per target.
     controllerReady.value = await controllerAvailable(store, HOST_CLUSTER_ID);
+
+    if (!controllerReady.value) {
+      // Both answers are needed before the form can say anything useful: one
+      // decides whether a control is offered, the other what to say instead.
+      [controllerAllowed.value, controllerChart.value] = await Promise.all([
+        canInstallController(store, HOST_CLUSTER_ID),
+        findControllerChart(store),
+      ]).then(([allowed, chart]) => [allowed, chart || null] as [boolean, ControllerChart | null]);
+    }
     clusters.value = await readyClusters(store);
     // Prefer a downstream cluster; local is discouraged but not blocked.
     clusterId.value = (clusters.value.find((c) => !c.isLocal) || clusters.value[0])?.id || '';
@@ -732,9 +783,14 @@ onMounted(async() => {
       :label="i18n.t('remuda.warning.localCluster')"
     />
     <Banner
-      v-if="!controllerReady"
+      v-if="willInstallController"
+      color="info"
+      :label="i18n.t('remuda.create.controllerNotice', { version: controllerChart?.version })"
+    />
+    <Banner
+      v-else-if="controllerBlocked"
       color="error"
-      :label="i18n.t('remuda.warning.noController')"
+      :label="i18n.t(controllerChart ? 'remuda.warning.controllerForbidden' : 'remuda.warning.controllerNoChart')"
     />
     <Banner
       v-if="storageUnavailable"

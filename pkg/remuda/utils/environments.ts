@@ -1,10 +1,10 @@
 import {
-  ENDPOINTS, ENVIRONMENT_API_VERSION, ENVIRONMENT_CRD, ENVIRONMENT_KIND,
-  HOST_CLUSTER_ID, LABEL_NAME, REMUDA_NS,
+  ENDPOINTS, ENVIRONMENT_API_VERSION, ENVIRONMENT_KIND, HOST_CLUSTER_ID, LABEL_NAME,
+  REMUDA_NS,
 } from './constants';
 import {
-  clusterResourceUrl, create, deleteEnvironment, ensureNamespace, list, readEnvironments,
-  remove, resourceUrl, setEnvironmentRunning,
+  create, deleteEnvironment, ensureNamespace, list, readEnvironments, remove, resourceUrl,
+  setEnvironmentRunning,
 } from './api';
 import type {
   BuildState, EnvironmentCR, EnvironmentRecord, RemudaSpec, RunState,
@@ -22,24 +22,6 @@ import type {
  * a matter of deleting the `legacy` branches in this file and the modules they
  * call, rather than unpicking provenance checks from across the pages.
  */
-
-/**
- * Whether this cluster can accept an Environment.
- *
- * Probes the CRD rather than the controller's Deployment: the API server
- * accepts a CR the moment the CRD is registered, and a controller that is
- * restarting or briefly unready still reconciles it afterwards. Testing for the
- * Deployment would refuse creates that would have worked.
- */
-export async function controllerAvailable(store: any, clusterId: string): Promise<boolean> {
-  try {
-    const res = await store.dispatch('management/request', { url: clusterResourceUrl(clusterId, ENDPOINTS.customresourcedefinition, ENVIRONMENT_CRD) });
-
-    return !!res?.id;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Fold a CR into the shape the pages already render.
