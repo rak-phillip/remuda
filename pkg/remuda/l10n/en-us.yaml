@@ -123,6 +123,9 @@ remuda:
       same instance.
     source: Source
     backendImage: Backend image
+    copy: Copy
+    show: Show
+    hide: Hide
     rebuild: Rebuild UI
     rebuilding: Rebuilding
     start: Start

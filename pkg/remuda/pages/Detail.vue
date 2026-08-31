@@ -338,7 +338,7 @@ onUnmounted(() => clearInterval(timer));
             size="small"
             @click="copy(BOOTSTRAP_USERNAME)"
           >
-            Copy
+            {{ i18n.t('remuda.detail.copy') }}
           </RcButton>
         </dd>
 
@@ -351,14 +351,14 @@ onUnmounted(() => clearInterval(timer));
             size="small"
             @click="revealed = !revealed"
           >
-            {{ revealed ? 'Hide' : 'Show' }}
+            {{ i18n.t(revealed ? 'remuda.detail.hide' : 'remuda.detail.show') }}
           </RcButton>
           <RcButton
             variant="link"
             size="small"
             @click="copy(password)"
           >
-            Copy
+            {{ i18n.t('remuda.detail.copy') }}
           </RcButton>
         </dd>
 
@@ -413,7 +413,7 @@ onUnmounted(() => clearInterval(timer));
               size="small"
               @click="copy(indexUrl)"
             >
-              Copy
+              {{ i18n.t('remuda.detail.copy') }}
             </RcButton>
           </dd>
         </dl>
