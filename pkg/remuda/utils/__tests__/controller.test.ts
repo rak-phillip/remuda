@@ -1,6 +1,7 @@
 import {
   CONTROLLER_CHART, CONTROLLER_NAMESPACE, EXTENSION_VERSION, canInstallController,
-  controllerAvailable, findControllerChart, installController
+  controllerAvailable, environmentApiReady, findControllerChart, installController,
+  waitForController
 } from '../controller';
 
 /**
@@ -38,6 +39,59 @@ describe('controllerAvailable', () => {
   it('treats a 404 as absent rather than as an error', async() => {
     // Which is the ordinary state of every cluster that has not installed it.
     expect(await controllerAvailable(storeOf(() => new Error('404')))).toBe(false);
+  });
+});
+
+describe('environmentApiReady', () => {
+  it('asks the collection endpoint the create will post to', async() => {
+    // Not the CRD. `apiextensions.k8s.io.customresourcedefinitions` is a schema
+    // Steve ships with, so a GET for the CRD object succeeds the instant the CRD
+    // is registered -- while `remuda.rancher.io.environments` is a schema Steve
+    // has to learn, and does not for another few seconds. In that gap a POST
+    // still 404s, which is what made every first create on a fresh Rancher fail.
+    const store = storeOf(() => ({ data: [] }));
+
+    expect(await environmentApiReady(store)).toBe(true);
+    expect(store.calls[0].url).toContain('remuda.rancher.io.environments');
+    expect(store.calls[0].url).not.toContain('customresourcedefinitions');
+  });
+
+  it('is false while Steve still 404s the type', async() => {
+    expect(await environmentApiReady(storeOf(() => new Error('404')))).toBe(false);
+  });
+
+  it('accepts an empty collection, which is the ordinary first answer', async() => {
+    // No environment exists yet on a Rancher that has just installed the chart,
+    // so an empty list is readiness and must not be read as absence.
+    expect(await environmentApiReady(storeOf(() => ({ data: [] })))).toBe(true);
+  });
+});
+
+describe('waitForController', () => {
+  it('waits for Steve to route the type, not for the CRD to exist', async() => {
+    // The CRD is present throughout here; only Steve is behind. The old
+    // implementation returned on the first poll and the create 404'd.
+    let steveReady = false;
+    const store = storeOf((req: any) => {
+      if (req.url.includes('remuda.rancher.io.environments')) {
+        return steveReady ? { data: [] } : new Error('404');
+      }
+
+      return { id: 'environments.remuda.rancher.io' };
+    });
+
+    const waiting = waitForController(store, { timeoutMs: 1000, intervalMs: 1 });
+
+    setTimeout(() => {
+      steveReady = true;
+    }, 10);
+
+    expect(await waiting).toBe(true);
+    expect(store.calls.every((c: any) => c.url.includes('remuda.rancher.io.environments'))).toBe(true);
+  });
+
+  it('gives up rather than hanging when the type never arrives', async() => {
+    expect(await waitForController(storeOf(() => new Error('404')), { timeoutMs: 20, intervalMs: 1 })).toBe(false);
   });
 });
 

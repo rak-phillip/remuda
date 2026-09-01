@@ -1,5 +1,5 @@
 import { ENDPOINTS, ENVIRONMENT_CRD, HOST_CLUSTER_ID } from './constants';
-import { clusterResourceUrl } from './api';
+import { clusterResourceUrl, collectionUrl } from './api';
 
 /**
  * Installing remuda-controller from inside the extension.
@@ -179,12 +179,42 @@ export async function installController(store: any, chart: ControllerChart): Pro
 }
 
 /**
- * Wait for the CRD to appear, which is the outcome rather than a proxy for it.
+ * Whether Steve will accept a POST to the Environment collection.
+ *
+ * A stricter question than controllerAvailable(), and the difference is the
+ * whole reason this exists. `apiextensions.k8s.io.customresourcedefinitions` is
+ * a schema Steve ships with, so a GET for the CRD *object* starts succeeding the
+ * instant the CRD is registered. `remuda.rancher.io.environments` is a schema
+ * Steve has to learn, and it only picks new ones up on its own refresh cycle --
+ * seconds later. In that gap the CRD is present, the API server is serving the
+ * type, and a POST through Steve still 404s.
+ *
+ * So this asks the collection endpoint the create will actually post to, which
+ * cannot answer before Steve is ready to route it.
+ */
+export async function environmentApiReady(store: any, clusterId = HOST_CLUSTER_ID): Promise<boolean> {
+  try {
+    await store.dispatch('management/request', { url: collectionUrl(clusterId, ENDPOINTS.environment) });
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait until an Environment can be created, which is the outcome rather than a
+ * proxy for it.
  *
  * Deliberately not the Helm operation's own status: a succeeded operation still
- * leaves a window before the API server serves the new type, and a create in
- * that window fails for a reason the user cannot act on. Polling the thing the
- * next step actually needs closes that window by construction.
+ * leaves a window before the new type can be created, and a create in that
+ * window fails for a reason the user cannot act on.
+ *
+ * It used to poll the CRD, on the reasoning that this "closes that window by
+ * construction". It closed the *API server's* window. The next step does not
+ * talk to the API server -- it talks to Steve, whose window was still open, so
+ * the first create on a fresh Rancher failed with a bare 404 every time. See
+ * environmentApiReady.
  */
 export async function waitForController(
   store: any, { timeoutMs = 120000, intervalMs = 2000 } = {},
@@ -192,7 +222,7 @@ export async function waitForController(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    if (await controllerAvailable(store)) {
+    if (await environmentApiReady(store)) {
       return true;
     }
 

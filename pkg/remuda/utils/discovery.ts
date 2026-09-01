@@ -697,8 +697,17 @@ export async function discoverDefaults(store: any, clusterId: string): Promise<C
  *
  * Reading first also makes the write a compare-and-swap rather than a blind
  * overwrite, so two people creating at once cannot silently clobber each other.
+ *
+ * The namespace is ensured because on a downstream target nothing else has
+ * created it: the environment's own objects are delivered by Fleet, which brings
+ * its namespace with them, and the Environment CR itself lives on the host. So
+ * the very first create on a cluster posted this ConfigMap into a namespace that
+ * did not exist, got a 404, and -- since the caller swallows failures here on
+ * purpose -- reported success and prefilled nothing, on that cluster, ever.
  */
 export async function saveDefaults(store: any, clusterId: string, defaults: ClusterDefaults): Promise<void> {
+  await ensureNamespace(store, clusterId);
+
   const url = `/k8s/clusters/${ clusterId }/v1/${ ENDPOINTS.configmap }/${ REMUDA_NS }/${ CONFIG_MAP_NAME }`;
   const body = {
     apiVersion: 'v1',

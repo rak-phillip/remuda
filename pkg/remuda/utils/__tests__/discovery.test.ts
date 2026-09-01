@@ -225,13 +225,43 @@ describe('saveDefaults', () => {
     return { store, calls };
   }
 
+  const posted = (calls: any[], endpoint: string) => calls.filter(
+    (c) => c.method === 'POST' && c.url.endsWith(`/${ endpoint }`)
+  );
+
   it('creates the ConfigMap when the cluster has none yet', async() => {
     const { store, calls } = mockStore(undefined);
 
     await saveDefaults(store, 'local', defaults);
 
-    expect(calls.some((c) => c.method === 'POST')).toBe(true);
+    expect(posted(calls, ENDPOINTS.configmap)).toHaveLength(1);
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('creates the namespace first, because on a downstream target nothing else has', async() => {
+    // The environment's own objects arrive by Fleet, which brings the namespace
+    // with them, and the Environment CR lives on the host -- so the first create
+    // on a target cluster used to POST this ConfigMap into a namespace that did
+    // not exist. The 404 was swallowed by the caller, so the create reported
+    // success and that cluster never prefilled anything, ever.
+    const { store, calls } = mockStore(undefined);
+
+    await saveDefaults(store, 'c-m-zxt2njmt', defaults);
+
+    const namespacePost = posted(calls, ENDPOINTS.namespace);
+
+    expect(namespacePost).toHaveLength(1);
+    expect(calls.indexOf(namespacePost[0])).toBeLessThan(
+      calls.indexOf(posted(calls, ENDPOINTS.configmap)[0])
+    );
+  });
+
+  it('leaves an existing namespace alone', async() => {
+    const { store, calls } = mockStore({ metadata: { resourceVersion: '1' } });
+
+    await saveDefaults(store, 'c-m-zxt2njmt', defaults);
+
+    expect(posted(calls, ENDPOINTS.namespace)).toHaveLength(0);
   });
 
   it('updates in place when it already exists, carrying resourceVersion', async() => {
