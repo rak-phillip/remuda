@@ -1,6 +1,6 @@
 {
   "name": "remuda",
-  "version": "0.2.0-rc.7",
+  "version": "0.2.0-rc.8",
   "private": false,
   "engines": {
     "node": ">=24"
