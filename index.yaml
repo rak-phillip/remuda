@@ -14,7 +14,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.2.0-rc.9
-    created: "2026-09-01T04:09:07.125303583Z"
+    created: "2026-09-01T04:20:47.083245221Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: 8c6118496a6482308119f406ce79ed01f129fe6e268338099f76eb50d1001730
@@ -43,7 +43,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.2.0-rc.8
-    created: "2026-09-01T03:37:39.32091488Z"
+    created: "2026-09-01T04:20:47.083012837Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: 5ad10fd3d7a9658d2044ebc111bcadcb0f6e5c4125de8a836923ddcc3fa5ad8d
@@ -72,7 +72,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.2.0-rc.7
-    created: "2026-09-01T03:37:39.320680589Z"
+    created: "2026-09-01T04:20:47.082784591Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: 2002c9de402bdedc0fd935943e7d8eb7b6e1ff93f6dabd97544f803cfa94c014
@@ -101,7 +101,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.2.0-rc.6
-    created: "2026-09-01T03:37:39.32043591Z"
+    created: "2026-09-01T04:20:47.08249453Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: a938c613c9d079aaf52855d847c8c5ff21399e045540ded15a459700364d6a3b
@@ -130,7 +130,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.2.0-rc.5
-    created: "2026-09-01T03:37:39.320164429Z"
+    created: "2026-09-01T04:20:47.082247148Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: c7f23cc2afdea9a8734e58e73a3aa0b2da57f777065d6898207c86e1525f1ffb
@@ -159,7 +159,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.2.0-rc.3
-    created: "2026-09-01T03:37:39.319918266Z"
+    created: "2026-09-01T04:20:47.08199116Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: 451c0b6d80ba596a4db5e21e51fada64faed1598631975d609513f8fd804efa1
@@ -188,7 +188,7 @@ entries:
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
     apiVersion: v2
     appVersion: 0.2.0-rc.2
-    created: "2026-09-01T03:37:39.31965978Z"
+    created: "2026-09-01T04:20:47.081731806Z"
     description: Deploy a Rancher instance running a dashboard branch, so QA and design
       can review WIP work
     digest: e3bf017beaef4795f54f937d79096e22dfbbce5f45002ec222534a53313c9bd9
@@ -210,8 +210,26 @@ entries:
       catalog.cattle.io/namespace: cattle-remuda-system
       catalog.cattle.io/release-name: remuda-controller
     apiVersion: v2
+    appVersion: 0.2.0-rc.9
+    created: "2026-09-01T04:20:47.08629547Z"
+    description: Keeps Remuda's cross-cluster hop pointing at current downstream node
+      addresses.
+    digest: 5604846946184e95e2762d0213d2697d6074c047deb9f32d15884237cad836dc
+    home: https://github.com/rak-phillip/remuda
+    name: remuda-controller
+    sources:
+    - https://github.com/rak-phillip/remuda
+    type: application
+    urls:
+    - assets/remuda-controller/remuda-controller-0.2.0-rc.9.tgz
+    version: 0.2.0-rc.9
+  - annotations:
+      catalog.cattle.io/certified: rancher
+      catalog.cattle.io/namespace: cattle-remuda-system
+      catalog.cattle.io/release-name: remuda-controller
+    apiVersion: v2
     appVersion: 0.2.0-rc.8
-    created: "2026-09-01T03:37:39.322985011Z"
+    created: "2026-09-01T04:20:47.08595238Z"
     description: Keeps Remuda's cross-cluster hop pointing at current downstream node
       addresses.
     digest: 0acc77bbb863ec579df3c5aacec404e4ffc4a3535e6422b01db496d3134eaf0a
@@ -229,7 +247,7 @@ entries:
       catalog.cattle.io/release-name: remuda-controller
     apiVersion: v2
     appVersion: 0.2.0-rc.7
-    created: "2026-09-01T03:37:39.322673265Z"
+    created: "2026-09-01T04:20:47.085203397Z"
     description: Keeps Remuda's cross-cluster hop pointing at current downstream node
       addresses.
     digest: 19080d1792542d7184dd5a3b2d9a5da2e8dd664a7a5d880b4c58b5a6a800ec89
@@ -247,7 +265,7 @@ entries:
       catalog.cattle.io/release-name: remuda-controller
     apiVersion: v2
     appVersion: 0.2.0-rc.6
-    created: "2026-09-01T03:37:39.322326313Z"
+    created: "2026-09-01T04:20:47.084565987Z"
     description: Keeps Remuda's cross-cluster hop pointing at current downstream node
       addresses.
     digest: dd0a53ec30e159c07c2ee367687408f45b85b4432b38d05729832d88d71dec9e
@@ -265,7 +283,7 @@ entries:
       catalog.cattle.io/release-name: remuda-controller
     apiVersion: v2
     appVersion: 0.2.0-rc.5
-    created: "2026-09-01T03:37:39.322007103Z"
+    created: "2026-09-01T04:20:47.084233066Z"
     description: Keeps Remuda's cross-cluster hop pointing at current downstream node
       addresses.
     digest: 3df5320188b4e879634b85a1c962a8e6e84e0fefbc95d08d90ab0fa707ef5ff0
@@ -283,7 +301,7 @@ entries:
       catalog.cattle.io/release-name: remuda-controller
     apiVersion: v2
     appVersion: 0.2.0-rc.3
-    created: "2026-09-01T03:37:39.321604466Z"
+    created: "2026-09-01T04:20:47.083929579Z"
     description: Keeps Remuda's cross-cluster hop pointing at current downstream node
       addresses.
     digest: 192bccf041a2d5a42a33c17567611e234e016f9784d4e2359897ffb822081f67
@@ -301,7 +319,7 @@ entries:
       catalog.cattle.io/release-name: remuda-controller
     apiVersion: v2
     appVersion: 0.2.0-rc.2
-    created: "2026-09-01T03:37:39.321231765Z"
+    created: "2026-09-01T04:20:47.083604983Z"
     description: Keeps Remuda's cross-cluster hop pointing at current downstream node
       addresses.
     digest: 2989f65e38a1d732acfc42f4cbfdf9e739f8dbe313d42ca8977c589726511171
@@ -313,4 +331,4 @@ entries:
     urls:
     - assets/remuda-controller/remuda-controller-0.2.0-rc.2.tgz
     version: 0.2.0-rc.2
-generated: "2026-09-01T04:09:07.124628413Z"
+generated: "2026-09-01T04:20:47.081302134Z"
