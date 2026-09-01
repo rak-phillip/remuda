@@ -75,21 +75,30 @@ stranded pod then blocks its PVCs from ever finalising.
 fresh name; doing that on a schedule would rebuild every environment every interval. Triggering a
 rebuild is still the UI's.
 
-### Resolution reads what the extension already discovered
+### Resolution reads the host cluster
 
-The controller does **not** re-derive the cluster's defaults. Probing a wildcard needs a Job and a
-log read, picking non-colliding nested CIDRs needs the host cluster's own, and mirroring an issuer
-needs to go looking for one — all of that already runs in the browser, and its answer is already
-written to the `remuda-config` ConfigMap. The controller reads it from there.
+The controller discovers the host's own defaults for itself, in `hostDefaults`: its ingress class
+and default StorageClass, `server-url` and `server-version`, its ClusterIssuer or the namespaced
+ACME Issuer to mirror, and a nested CIDR pair that misses the ranges its own k3s occupies. Nothing
+is handed to it.
 
-So an environment created entirely from `kubectl` needs that ConfigMap to exist: create one
-environment through the extension per cluster to record it, or pin every field in the spec. Absent
-it, the environment gets `Resolved=False` with a message saying so rather than a half-built
-workload.
+This used to read the `remuda-config` ConfigMap instead, on the reasoning that the extension had
+already discovered all of it in the browser. That was wrong in a way no test caught. The extension
+writes that ConfigMap to the cluster an environment **targets**, while this controller only ever
+runs on — and reads — the host. Targeting the host cluster hid it, because there the two are the
+same cluster. Every downstream environment on a Rancher where nobody had first created a local one
+therefore sat at `Resolved=False` forever, told to create an environment through the extension,
+which is exactly what its owner had just done.
+
+`remuda-config` still exists, still on the target cluster, and is now purely the extension's
+prefill: it is what makes the create form come back with the answers you gave last time. Nothing
+reads it here.
 
 The one thing never guessed is the nested CIDR pair. A nested k3s sharing the host cluster's CIDRs
-cannot reach its own CoreDNS, and nothing in the environment recovers from that, so an unresolvable
-pair is an error rather than a default.
+cannot reach its own CoreDNS, and nothing in the environment recovers from that — so the candidate
+list in `hostdefaults.go` and `NESTED_CIDR_CANDIDATES` in `discovery.ts` have to stay in step.
+Whichever of the two resolves an environment must reach the same answer, or the same spec produces a
+different nested k3s depending on who created it.
 
 ### Downstream clusters go through Fleet
 
@@ -119,7 +128,7 @@ list and removes Bundles whose Environment is gone, keyed on its UID rather than
 #### What a downstream environment must pin
 
 Fleet delivers; it does not read back. So nothing here can see the target cluster's ingress class,
-its default StorageClass, or the CIDRs its own k3s uses — and `remuda-config` describes the *host*,
+its default StorageClass, or the CIDRs its own k3s uses — and `hostDefaults` describes the *host*,
 which would be a wrong answer rather than a missing one. A downstream Environment therefore has to
 set `ingressClass`, `storageClass`, `nestedPodCidr` and `nestedServiceCidr`, and says so in a
 condition naming exactly which are absent. The extension can see all four and writes them in.

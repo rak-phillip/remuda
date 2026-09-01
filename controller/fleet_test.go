@@ -216,7 +216,7 @@ func renderedString(bundle interface{ UnstructuredContent() map[string]any }) st
 func TestRequirePinnedNamesEveryMissingField(t *testing.T) {
 	// Fleet delivers to the target cluster; it does not read it back. Nothing
 	// here can see that cluster's ingress class, its default StorageClass, or the
-	// CIDRs its own k3s uses -- and remuda-config describes the host, which would
+	// CIDRs its own k3s uses -- and hostDefaults describes the host, which would
 	// be the wrong answer rather than a missing one.
 	env := &Environment{}
 	env.Name = "multi-idp"

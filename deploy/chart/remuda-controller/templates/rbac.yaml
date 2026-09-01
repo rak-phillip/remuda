@@ -21,6 +21,42 @@ rules:
   - apiGroups: ["management.cattle.io"]
     resources: ["clusters"]
     verbs: ["get", "list", "watch"]
+  # What the host cluster is, read from the host cluster.
+  #
+  # These replace the remuda-config ConfigMap, which the extension writes to the
+  # cluster an environment *targets* while this controller only ever reads the
+  # host -- so every downstream environment stalled on defaults that were never
+  # going to arrive. A downstream environment's hop is fronted by the host's
+  # ingress and its TLS terminates on the host's issuer, and no field on the spec
+  # can supply either, so this controller has to be able to see them itself.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingressclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  # Cluster-wide, unlike the namespaced Issuer rule below, because the issuer
+  # worth mirroring is the one Rancher provisions for itself in cattle-system.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["clusterissuers", "issuers"]
+    verbs: ["get", "list", "watch"]
+  # Nodes for spec.podCIDR, which is how the nested k3s gets ranges that do not
+  # collide with the host's. Addresses are not read here -- a downstream node's
+  # come from management.cattle.io above.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # Exactly two objects each, by name. The service CIDR is not published
+  # anywhere, so the ClusterIP of default/kubernetes stands in for it; server-url
+  # is the host's own domain and server-version picks the backend image.
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["kubernetes"]
+    verbs: ["get"]
+  - apiGroups: ["management.cattle.io"]
+    resources: ["settings"]
+    resourceNames: ["server-url", "server-version"]
+    verbs: ["get"]
   # How an environment reaches a cluster this controller has no credentials for:
   # a Bundle here, applied there by the Fleet agent that every registered cluster
   # already runs. Cluster-scoped because a Bundle lives in whichever Fleet

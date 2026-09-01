@@ -170,9 +170,9 @@ export function environmentCrBody(spec: Partial<RemudaSpec> & {
   (['clusterId', 'owner', 'backendImage', 'hostname', 'entryPort',
     'dataSizeGb', 'uiSizeGb', 'cacheSizeGb'] as (keyof RemudaSpec)[]).forEach(pin);
 
-  // Fleet delivers without reading back, and remuda-config describes the host
-  // rather than the target -- a wrong answer rather than a missing one. See
-  // "What a downstream environment must pin" in controller/README.md.
+  // Fleet delivers without reading back, and the controller can only see the
+  // host -- a wrong answer rather than a missing one. See "What a downstream
+  // environment must pin" in controller/README.md.
   if (opts.downstream) {
     (['ingressClass', 'storageClass', 'nestedPodCidr',
       'nestedServiceCidr'] as (keyof RemudaSpec)[]).forEach(pin);

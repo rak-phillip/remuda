@@ -235,7 +235,7 @@ describe('environmentCrBody', () => {
       nestedServiceCidr: '10.45.0.0/16',
     });
 
-    // On the host cluster the controller reads all four from remuda-config, so
+    // On the host cluster the controller discovers all four for itself, so
     // sending them would pin values nobody chose.
     const host = environmentCrBody(downstream).spec;
 

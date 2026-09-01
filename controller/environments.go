@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log"
 	"reflect"
@@ -36,28 +35,24 @@ const (
 	ConditionProvisioned = "Provisioned"
 )
 
-// clusterDefaults is the per-cluster discovery the extension persists into the
-// remuda-config ConfigMap.
+// clusterDefaults describes the host cluster: what ingress class it runs, what
+// domain it answers on, how it issues certificates, and which nested CIDRs are
+// free of its own.
 //
-// Reading it rather than re-deriving it is what keeps discovery.ts in the
-// browser: probing a wildcard needs a Job and a log read, picking nested CIDRs
-// needs the host cluster's own, and mirroring an issuer needs to find one. All
-// of that already runs, and its answer is already written down here.
+// Read off the host cluster by hostDefaults(), not handed over by the extension.
+// See that function for why.
 type clusterDefaults struct {
-	BaseDomain    string `json:"baseDomain"`
-	ServerVersion string `json:"serverVersion"`
-	IngressClass  string `json:"ingressClass"`
-	StorageClass  string `json:"storageClass"`
-	ClusterIssuer string `json:"clusterIssuer"`
-	IssuerKind    string `json:"issuerKind"`
+	BaseDomain    string
+	ServerVersion string
+	IngressClass  string
+	StorageClass  string
+	ClusterIssuer string
+	IssuerKind    string
 
-	ACME *struct {
-		Source string         `json:"source"`
-		Spec   map[string]any `json:"spec"`
-	} `json:"acme"`
+	ACME *acmeSource
 
-	NestedPodCIDR     string `json:"nestedPodCidr"`
-	NestedServiceCIDR string `json:"nestedServiceCidr"`
+	NestedPodCIDR     string
+	NestedServiceCIDR string
 }
 
 // reconcileEnvironments brings every Environment's objects into line with its
@@ -202,7 +197,7 @@ func isHostCluster(clusterID string) bool {
 func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec, *Hop, error) {
 	host := isHostCluster(env.Spec.ClusterID)
 
-	defaults, err := c.clusterDefaults(ctx)
+	defaults, err := c.hostDefaults(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -227,9 +222,9 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 	// resolves to anything either way.
 	spec.BackendImage = pick(env.Spec.BackendImage, BackendImageForBranch(env.Spec.Branch, defaults.ServerVersion))
 
-	// Everything below describes the *target* cluster. remuda-config describes
-	// the host, so for a downstream environment these can only come from the
-	// spec -- see requirePinned.
+	// Everything below describes the *target* cluster, and hostDefaults only
+	// ever describes the host -- so for a downstream environment these can only
+	// come from the spec. See requirePinned.
 	if host {
 		spec.IngressClass = pick(env.Spec.IngressClass, defaults.IngressClass)
 		spec.StorageClass = pick(env.Spec.StorageClass, defaults.StorageClass)
@@ -257,8 +252,8 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 
 		// No issuer on the target, deliberately. A downstream environment is
 		// fronted from the host cluster and TLS terminates there, so the target
-		// needs no cert-manager at all -- and falling back to remuda-config's
-		// issuer here would annotate the downstream Ingress for an issuer on a
+		// needs no cert-manager at all -- and falling back to the host's issuer
+		// here would annotate the downstream Ingress for an issuer on a
 		// different cluster. ingress() omits TLS and annotations entirely when
 		// ClusterIssuer is empty, so there is nothing else to do.
 		spec.ClusterIssuer = env.Spec.ClusterIssuer
@@ -269,7 +264,7 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 	spec.Hostname = env.Spec.Hostname
 	if spec.Hostname == "" {
 		if defaults.BaseDomain == "" {
-			return nil, nil, fmt.Errorf("no spec.hostname, and %s records no baseDomain to compose one from", ConfigMapName)
+			return nil, nil, fmt.Errorf("no spec.hostname, and this Rancher's server-url gives no domain to compose one from")
 		}
 
 		spec.Hostname = env.Name + "." + defaults.BaseDomain
@@ -282,14 +277,14 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 	}
 
 	if spec.IngressClass == "" {
-		return nil, nil, fmt.Errorf("no spec.ingressClass, and %s records none for this cluster", ConfigMapName)
+		return nil, nil, fmt.Errorf("no spec.ingressClass, and the host cluster publishes no IngressClass to fall back on")
 	}
 
 	if spec.NestedPodCIDR == "" || spec.NestedServiceCIDR == "" {
 		// Defaulting these blindly is the one shortcut that must not be taken:
 		// a nested k3s sharing the host's CIDRs cannot reach its own CoreDNS,
 		// and nothing in the environment recovers from it.
-		return nil, nil, fmt.Errorf("no nested CIDRs in spec or in %s, and guessing them risks colliding with the host cluster", ConfigMapName)
+		return nil, nil, fmt.Errorf("no nested CIDRs in spec, and none could be picked that miss the host cluster's own")
 	}
 
 	hop, err := c.resolveHop(ctx, env, defaults)
@@ -304,8 +299,8 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 // environment, and returns nil when it should not front one at all.
 //
 // Everything here describes the *host*: its ingress class, its issuer, its
-// wildcard. remuda-config on this cluster is exactly that, which is why the same
-// file is the wrong source for the target's settings and the right one here.
+// wildcard. hostDefaults reads exactly that, which is why it is the right source
+// here and the wrong one for the target's own settings.
 //
 // The addresses are the target's, and are the one part that drifts -- replacing
 // a node changes them -- which is what reconcileAll's resync exists for. They
@@ -381,7 +376,7 @@ func (c *controller) resolveHop(ctx context.Context, env *Environment, defaults 
 //
 // Fleet delivers objects to the target cluster; it does not read it back. So
 // nothing here can see that cluster's ingress class, its default StorageClass,
-// or the CIDRs its own k3s already uses -- and remuda-config describes the host,
+// or the CIDRs its own k3s already uses -- and hostDefaults describes the host,
 // which would be the wrong answer rather than a missing one.
 //
 // The extension can see all four, because the browser holds a Rancher session
@@ -412,24 +407,6 @@ func requirePinned(env *Environment, spec *renderSpec) error {
 		"%s runs on %s, which this controller delivers to through Fleet and cannot read back -- "+
 			"so %s must be set in the spec; the extension discovers them for you",
 		env.Name, env.Spec.ClusterID, strings.Join(missing, ", "))
-}
-
-func (c *controller) clusterDefaults(ctx context.Context) (*clusterDefaults, error) {
-	cm, err := c.core.CoreV1().ConfigMaps(Namespace).Get(ctx, ConfigMapName, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("no %s/%s: create one environment through the extension to record this cluster's defaults, or pin every field in the spec", Namespace, ConfigMapName)
-		}
-
-		return nil, err
-	}
-
-	out := &clusterDefaults{}
-	if err := json.Unmarshal([]byte(cm.Data["defaults"]), out); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", ConfigMapName, err)
-	}
-
-	return out, nil
 }
 
 // provision creates whatever is missing, and leaves whatever is there alone.

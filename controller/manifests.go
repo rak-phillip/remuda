@@ -42,10 +42,6 @@ const (
 
 	K3sConfigPath = "/etc/rancher/k3s/config.yaml"
 	NginxConfPath = "/etc/nginx/conf.d/default.conf"
-
-	// Per-cluster defaults, discovered by the extension and persisted so a
-	// scripted create does not have to restate them.
-	ConfigMapName = "remuda-config"
 )
 
 // inotify limits to raise on the node before a backend starts. Counted per-uid
