@@ -6,8 +6,9 @@ import {
   create, deleteEnvironment, ensureNamespace, list, readEnvironments, remove, resourceUrl,
   setEnvironmentRunning,
 } from './api';
+import { buildStateOf } from './status';
 import type {
-  BuildState, EnvironmentCR, EnvironmentRecord, RemudaSpec, RunState,
+  BuildState, EnvironmentCR, EnvironmentRecord, RemudaSpec, RemudaSummary, RunState,
 } from '../types';
 
 /**
@@ -60,6 +61,50 @@ export function crRunState(cr: EnvironmentCR): RunState {
   case 'Stopped': return 'stopped';
   case 'Stopping': return 'stopping';
   default: return 'pending';
+  }
+}
+
+
+/**
+ * Fill in the build state of downstream environments, in place.
+ *
+ * Fleet reports Deployments and PVCs back to the host cluster but not Jobs, so
+ * `status.build` on a downstream Environment is honestly `Unknown` -- the
+ * controller is on the host and has nothing to read. The browser is not so
+ * limited: it holds a Rancher session for every cluster, which is how the detail
+ * page has always shown the real state by listing the target's Jobs itself.
+ *
+ * Without this the two disagreed. The list said `Unknown` for the entire life of
+ * every downstream environment while the page one click away said `Ready`, and a
+ * list that contradicts the thing it links to is worse than either answer alone.
+ *
+ * One read per distinct target cluster rather than per environment, and only for
+ * rows actually left unresolved -- an environment on the host cluster has its
+ * build state reported by its own CR and still costs no extra read, which is
+ * what the CR was for.
+ *
+ * A target that cannot be read leaves its rows exactly as they were. `Unknown`
+ * is the honest answer to a question that could not be asked; guessing is not.
+ */
+export async function fillDownstreamBuildState(store: any, rows: RemudaSummary[]): Promise<void> {
+  const unresolved = rows.filter(
+    (row) => row.source === 'cr' && row.buildState === 'unknown' && row.clusterId !== HOST_CLUSTER_ID
+  );
+
+  if (!unresolved.length) {
+    return;
+  }
+
+  const byCluster = new Map<string, any[]>();
+
+  await Promise.all([...new Set(unresolved.map((row) => row.clusterId))].map(async(clusterId) => {
+    const res = await list(store, clusterId, ENDPOINTS.job).catch(() => ({ data: [] }));
+
+    byCluster.set(clusterId, res?.data || []);
+  }));
+
+  for (const row of unresolved) {
+    row.buildState = buildStateOf(byCluster.get(row.clusterId) || [], row.spec.name);
   }
 }
 

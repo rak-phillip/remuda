@@ -1,7 +1,8 @@
 import {
-  crBuildState, crRunState, environmentCrBody, listEnvironments, specFromCr
+  crBuildState, crRunState, environmentCrBody, fillDownstreamBuildState, listEnvironments,
+  specFromCr
 } from '../environments';
-import { ENVIRONMENT_API_VERSION, ENVIRONMENT_KIND, REMUDA_NS } from '../constants';
+import { ENDPOINTS, ENVIRONMENT_API_VERSION, ENVIRONMENT_KIND, REMUDA_NS } from '../constants';
 import type { EnvironmentCR, RemudaSpec } from '../../types';
 
 const cr = (overrides: Partial<EnvironmentCR> = {}): EnvironmentCR => ({
@@ -250,5 +251,110 @@ describe('environmentCrBody', () => {
 
     expect(body.spec.hostname).toBeUndefined();
     expect(body.spec.backendImage).toBeUndefined();
+  });
+});
+
+
+describe('fillDownstreamBuildState', () => {
+  const row = (overrides: any = {}) => ({
+    spec:       { name: 'prak-test' },
+    source:     'cr',
+    clusterId:  'c-m-jmdj9vtw',
+    buildState: 'unknown',
+    ...overrides,
+  } as any);
+
+  const job = (name: string, status: any) => ({
+    metadata: {
+      name: `${ name }-build-1`, labels: { 'remuda.rancher.io/name': name }, creationTimestamp: '2026-09-01T03:53:11Z'
+    },
+    status,
+  });
+
+  function storeOf(byCluster: Record<string, any>) {
+    const calls: any[] = [];
+
+    return {
+      calls,
+      dispatch: (_action: string, req: any) => {
+        calls.push(req);
+
+        const id = req.url.split('/k8s/clusters/')[1].split('/')[0];
+        const answer = byCluster[id];
+
+        return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+      },
+    };
+  }
+
+  it('reads the target cluster, which is the only place a downstream Job exists', async() => {
+    // Fleet carries Deployments and PVCs back to the host but not Jobs, so the
+    // controller writes Unknown and the browser has to ask the target itself --
+    // exactly as the detail page has always done.
+    const rows = [row()];
+    const store = storeOf({ 'c-m-jmdj9vtw': { data: [job('prak-test', { succeeded: 1 })] } });
+
+    await fillDownstreamBuildState(store, rows);
+
+    expect(rows[0].buildState).toBe('ready');
+    expect(store.calls[0].url).toContain('/k8s/clusters/c-m-jmdj9vtw/');
+    expect(store.calls[0].url).toContain(ENDPOINTS.job);
+  });
+
+  it('reads each target once however many environments it carries', async() => {
+    const rows = [
+      row({ spec: { name: 'one' } }),
+      row({ spec: { name: 'two' } }),
+      row({ spec: { name: 'three' }, clusterId: 'c-m-other' }),
+    ];
+    const store = storeOf({
+      'c-m-jmdj9vtw': { data: [job('one', { succeeded: 1 }), job('two', { failed: 1 })] },
+      'c-m-other':    { data: [job('three', {})] },
+    });
+
+    await fillDownstreamBuildState(store, rows);
+
+    expect(rows.map((r) => r.buildState)).toStrictEqual(['ready', 'failed', 'building']);
+    expect(store.calls).toHaveLength(2);
+  });
+
+  it('leaves a host-cluster row alone, because its CR already reported', async() => {
+    // The whole point of the CR is that this row costs no read at all.
+    const rows = [row({ clusterId: 'local' })];
+    const store = storeOf({});
+
+    await fillDownstreamBuildState(store, rows);
+
+    expect(store.calls).toHaveLength(0);
+    expect(rows[0].buildState).toBe('unknown');
+  });
+
+  it('leaves a row the controller already answered alone', async() => {
+    const rows = [row({ buildState: 'ready' })];
+    const store = storeOf({});
+
+    await fillDownstreamBuildState(store, rows);
+
+    expect(store.calls).toHaveLength(0);
+  });
+
+  it('leaves a legacy row alone, since its state was derived at listing time', async() => {
+    const rows = [row({ source: 'legacy' })];
+    const store = storeOf({});
+
+    await fillDownstreamBuildState(store, rows);
+
+    expect(store.calls).toHaveLength(0);
+  });
+
+  it('keeps Unknown when the target cannot be read', async() => {
+    // An honest answer to a question that could not be asked. Guessing here
+    // would report a build state for a cluster nobody could reach.
+    const rows = [row()];
+    const store = storeOf({ 'c-m-jmdj9vtw': new Error('403') });
+
+    await fillDownstreamBuildState(store, rows);
+
+    expect(rows[0].buildState).toBe('unknown');
   });
 });

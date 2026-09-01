@@ -136,7 +136,9 @@ condition naming exactly which are absent. The extension can see all four and wr
 #### What is lost downstream
 
 - **Build state.** Measured against a live Fleet: it tracks Deployments and PVCs but not Jobs, so
-  `status.build` is `Unknown` and the `Provisioned` condition says so.
+  `status.build` is `Unknown` and the `Provisioned` condition says so. Lost to *this controller*, not
+  to the extension — a browser holds a Rancher session for every cluster, so both the list and the
+  detail page read the target's Jobs directly and show the real state.
 - **`Stopping`.** Fleet reports whether a Deployment matches its spec, not whether a pod is still
   terminating — so a stop reads `Stopped` at once, and the window where the backend still holds the
   RWO data volume is invisible.

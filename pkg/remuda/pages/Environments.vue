@@ -12,7 +12,8 @@ import EmptyState from '../components/EmptyState.vue';
 import { buildStateOf, isIncomplete, runStateOf } from '../utils/status';
 import { list, readyClusters } from '../utils/api';
 import {
-  crBuildState, crIncomplete, crRunState, deleteRecord, listEnvironments, setRecordRunning
+  crBuildState, crIncomplete, crRunState, deleteRecord, fillDownstreamBuildState, listEnvironments,
+  setRecordRunning
 } from '../utils/environments';
 import { environmentUrl } from '../utils/manifests';
 import { relativeAge } from '../utils/age';
@@ -39,10 +40,14 @@ let timer: any = null;
 /**
  * Both records, rendered identically.
  *
- * A CR reports its own state, so its row costs no extra reads. A legacy
+ * A CR reports its own state, so its row costs no extra reads here. A legacy
  * environment has no status to report and its state is still derived from the
  * Deployments and Jobs -- which is why those two collections are fetched only
  * when there is a legacy environment left to need them.
+ *
+ * The one thing a CR cannot report is a downstream build, which Fleet does not
+ * carry back to the host. fillDownstreamBuildState resolves those afterwards,
+ * once, per target cluster.
  */
 async function loadCluster(cluster: { id: string; name: string }): Promise<RemudaSummary[]> {
   const records = await listEnvironments(store, cluster.id);
@@ -106,6 +111,10 @@ async function load() {
     for (const row of named) {
       row.clusterName = clusters.find((c) => c.id === row.clusterId)?.name || row.clusterId;
     }
+
+    // Also after the flatten, and for the same reason: a downstream row's target
+    // is only known from its spec, and the reads are batched across all of them.
+    await fillDownstreamBuildState(store, named);
 
     rows.value = named;
     // After the rows, and never allowed to fail the load: a list of environments
@@ -215,7 +224,7 @@ onUnmounted(() => clearInterval(timer));
       <h1>{{ i18n.t('remuda.list.title') }}</h1>
       <RcButton
         variant="primary"
-        size="medium"
+        size="large"
         @click="goCreate"
       >
         {{ i18n.t('remuda.list.createAction') }}
