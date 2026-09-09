@@ -125,6 +125,25 @@ controller deliberately does not have, and would wedge every Environment in `Ter
 chart were ever uninstalled with environments still running. `reapBundles` runs after a **successful**
 list and removes Bundles whose Environment is gone, keyed on its UID rather than its name.
 
+#### Per-role storage classes
+
+`storageClass` sets all three volumes, and `dataStorageClass`, `uiStorageClass` and
+`cacheStorageClass` override it one volume at a time. They exist because the three are not equally
+valuable: `data` is the nested k3s's etcd and the only one whose loss cannot be rebuilt, while `ui`
+holds a bundle rebuilt from git in minutes and `cache` is a yarn cache. Putting `data` on a durable
+class while the other two stay node-local is the case they were added for.
+
+Unlike everything else here they are **never resolved** — nothing can ask a cluster which of its
+classes is the durable one — so they are spec-or-nothing on the host and downstream alike, an empty
+value is always valid, and a downstream Environment does not have to pin them. `status.resolved`
+records the effective class for each volume after the fallback, so reading it back never means
+redoing that fallback by hand.
+
+Splitting the classes can split scheduling. With `WaitForFirstConsumer`, three volumes on one
+node-local class pin every pod to a single node; moving `data` alone to a network-attached class
+lets the backend land away from the build. That is fine — they talk over Services — and `ui`, which
+the ui Deployment and the build Job both mount, still shares one class and so still co-locates.
+
 #### What a downstream environment must pin
 
 Fleet delivers; it does not read back. So nothing here can see the target cluster's ingress class,
