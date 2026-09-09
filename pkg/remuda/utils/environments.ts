@@ -211,9 +211,13 @@ export function environmentCrBody(spec: Partial<RemudaSpec> & {
     }
   };
 
-  // Chosen by the person, so always intent rather than discovery.
+  // Chosen by the person, so always intent rather than discovery. The per-role
+  // storage classes belong here rather than in the downstream-only list below:
+  // they are never resolved from any cluster, so there is nothing for the host
+  // case to discover and no reason to withhold them from it.
   (['clusterId', 'owner', 'backendImage', 'hostname', 'entryPort',
-    'dataSizeGb', 'uiSizeGb', 'cacheSizeGb'] as (keyof RemudaSpec)[]).forEach(pin);
+    'dataSizeGb', 'uiSizeGb', 'cacheSizeGb',
+    'dataStorageClass', 'uiStorageClass', 'cacheStorageClass'] as (keyof RemudaSpec)[]).forEach(pin);
 
   // Fleet delivers without reading back, and the controller can only see the
   // host -- a wrong answer rather than a missing one. See "What a downstream

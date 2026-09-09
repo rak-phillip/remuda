@@ -131,6 +131,20 @@ export interface RemudaSpec {
   ingressClass: string;
   /** Omitted when the cluster has no default StorageClass to fall back on. */
   storageClass?: string;
+  /**
+   * Per-role overrides for storageClass, each falling back to it when unset.
+   *
+   * The three volumes are not equally valuable: `data` is the nested cluster's
+   * etcd and the only one whose loss cannot be rebuilt, while `ui` is a bundle
+   * rebuilt from git in minutes and `cache` is a yarn cache. These exist so
+   * `data` can sit on durable storage without the other two paying for it.
+   *
+   * Never resolved -- no cluster can be asked which of its classes is durable
+   * -- so on a read these come back only when they were set.
+   */
+  dataStorageClass?: string;
+  uiStorageClass?: string;
+  cacheStorageClass?: string;
   /** Omitted when the cluster offers no usable issuer at all. */
   clusterIssuer?: string;
   /** Defaults to ClusterIssuer when absent -- see IssuerKind. */

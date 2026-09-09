@@ -446,6 +446,76 @@ func TestPVCOmitsTheStorageClassWhenThereIsNone(t *testing.T) {
 	}
 }
 
+// className is the assertion the per-role tests share: a nil pointer and a
+// pointer to "" mean very different things to the API server, so want == ""
+// asserts absence rather than emptiness.
+func className(t *testing.T, claim *corev1.PersistentVolumeClaim, want string) {
+	t.Helper()
+
+	got := claim.Spec.StorageClassName
+
+	switch {
+	case want == "" && got != nil:
+		t.Errorf("%s: storageClassName = %q, want it absent entirely", claim.Name, *got)
+	case want != "" && got == nil:
+		t.Errorf("%s: storageClassName absent, want %q", claim.Name, want)
+	case want != "" && *got != want:
+		t.Errorf("%s: storageClassName = %q, want %q", claim.Name, *got, want)
+	}
+}
+
+func TestPVCPerRoleStorageClassOverrides(t *testing.T) {
+	spec := testSpec()
+	spec.DataStorageClass = "ebs-gp3"
+	spec.UIStorageClass = "fast-local"
+	spec.CacheStorageClass = "throwaway"
+
+	className(t, spec.pvc("data", spec.DataSizeGB, RoleBackend), "ebs-gp3")
+	className(t, spec.pvc("ui", spec.UISizeGB, RoleUI), "fast-local")
+	className(t, spec.pvc("cache", spec.CacheSizeGB, RoleBuild), "throwaway")
+}
+
+// The case the split exists for: durable etcd, node-local everything else.
+// Leaving the other two empty must keep them on the shared class rather than
+// dragging them onto the expensive one.
+func TestPVCPerRoleFallsBackToTheSharedClass(t *testing.T) {
+	spec := testSpec()
+	spec.DataStorageClass = "ebs-gp3"
+
+	className(t, spec.pvc("data", spec.DataSizeGB, RoleBackend), "ebs-gp3")
+	className(t, spec.pvc("ui", spec.UISizeGB, RoleUI), "local-path")
+	className(t, spec.pvc("cache", spec.CacheSizeGB, RoleBuild), "local-path")
+}
+
+// An override has to survive the no-default-class case, because that is exactly
+// the cluster where someone names a class by hand. The two volumes with no
+// opinion must still omit the field entirely rather than inherit "".
+func TestPVCPerRoleOverrideAppliesWithNoSharedClass(t *testing.T) {
+	spec := testSpec()
+	spec.StorageClass = ""
+	spec.DataStorageClass = "ebs-gp3"
+
+	className(t, spec.pvc("data", spec.DataSizeGB, RoleBackend), "ebs-gp3")
+	className(t, spec.pvc("ui", spec.UISizeGB, RoleUI), "")
+	className(t, spec.pvc("cache", spec.CacheSizeGB, RoleBuild), "")
+}
+
+// Every environment written before these fields existed has all three empty,
+// and must render exactly as it did then.
+func TestPVCWithoutOverridesIsUnchanged(t *testing.T) {
+	spec := testSpec()
+
+	for _, c := range []struct {
+		claim *corev1.PersistentVolumeClaim
+	}{
+		{spec.pvc("data", spec.DataSizeGB, RoleBackend)},
+		{spec.pvc("ui", spec.UISizeGB, RoleUI)},
+		{spec.pvc("cache", spec.CacheSizeGB, RoleBuild)},
+	} {
+		className(t, c.claim, "local-path")
+	}
+}
+
 func TestUIDeployment(t *testing.T) {
 	spec := testSpec()
 	pod := spec.uiDeployment(1).Spec.Template.Spec

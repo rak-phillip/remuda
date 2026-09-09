@@ -219,6 +219,31 @@ describe('environmentCrBody', () => {
     expect(body.spec.storageClass).toBeUndefined();
   });
 
+  it('pins the per-role storage classes on the host too, since nothing resolves them', () => {
+    const split = {
+      ...asked,
+      dataStorageClass:  'ebs-gp3',
+      cacheStorageClass: 'throwaway',
+    };
+
+    // Unlike storageClass, these are never discovered from a cluster, so
+    // withholding them from a host environment would lose the only place they
+    // could have come from.
+    expect(environmentCrBody(split).spec).toMatchObject({
+      dataStorageClass:  'ebs-gp3',
+      cacheStorageClass: 'throwaway',
+    });
+
+    // The one left unset stays absent rather than being sent empty, so the
+    // controller's fallback to storageClass is what decides it.
+    expect(environmentCrBody(split).spec.uiStorageClass).toBeUndefined();
+
+    expect(environmentCrBody(split, { downstream: true }).spec).toMatchObject({
+      dataStorageClass:  'ebs-gp3',
+      cacheStorageClass: 'throwaway',
+    });
+  });
+
   it('pins the four fields Fleet cannot read back, downstream only', () => {
     const downstream = {
       ...asked,

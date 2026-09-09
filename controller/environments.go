@@ -222,6 +222,14 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 	// resolves to anything either way.
 	spec.BackendImage = pick(env.Spec.BackendImage, BackendImageForBranch(env.Spec.Branch, defaults.ServerVersion))
 
+	// Outside the split below because they are never resolved from anywhere:
+	// nothing can discover which of a cluster's classes is the durable one, so
+	// these are spec-or-nothing on the host and downstream alike, and an empty
+	// value is always valid rather than missing.
+	spec.DataStorageClass = env.Spec.DataStorageClass
+	spec.UIStorageClass = env.Spec.UIStorageClass
+	spec.CacheStorageClass = env.Spec.CacheStorageClass
+
 	// Everything below describes the *target* cluster, and hostDefaults only
 	// ever describes the host -- so for a downstream environment these can only
 	// come from the spec. See requirePinned.
@@ -703,6 +711,9 @@ func (c *controller) recordStatus(
 		EntryPort:         spec.EntryPort,
 		IngressClass:      spec.IngressClass,
 		StorageClass:      spec.StorageClass,
+		DataStorageClass:  spec.storageClassFor(RoleBackend),
+		UIStorageClass:    spec.storageClassFor(RoleUI),
+		CacheStorageClass: spec.storageClassFor(RoleBuild),
 		ClusterIssuer:     spec.ClusterIssuer,
 		IssuerKind:        spec.IssuerKind,
 		NestedPodCIDR:     spec.NestedPodCIDR,

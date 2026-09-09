@@ -72,6 +72,18 @@ type EnvironmentSpec struct {
 	IssuerKind    string         `json:"issuerKind,omitempty"`
 	ACME          map[string]any `json:"acme,omitempty"`
 
+	// Per-role overrides for StorageClass, so the one volume whose loss is
+	// unrecoverable can be durable without paying for durable yarn caches.
+	// Empty falls back to StorageClass, which is what every environment
+	// written before these fields existed does.
+	//
+	// Never resolved from anywhere: there is no way to discover which class a
+	// cluster considers durable, so leaving these empty is always valid and a
+	// downstream environment does not have to pin them.
+	DataStorageClass  string `json:"dataStorageClass,omitempty"`
+	UIStorageClass    string `json:"uiStorageClass,omitempty"`
+	CacheStorageClass string `json:"cacheStorageClass,omitempty"`
+
 	NestedPodCIDR     string `json:"nestedPodCidr,omitempty"`
 	NestedServiceCIDR string `json:"nestedServiceCidr,omitempty"`
 }
@@ -131,11 +143,19 @@ const (
 // ResolvedSpec records what discovery settled on, so `kubectl get -o yaml`
 // shows what an environment is running with and not merely what was asked for.
 type ResolvedSpec struct {
-	BackendImage      string `json:"backendImage,omitempty"`
-	Hostname          string `json:"hostname,omitempty"`
-	EntryPort         int    `json:"entryPort,omitempty"`
-	IngressClass      string `json:"ingressClass,omitempty"`
-	StorageClass      string `json:"storageClass,omitempty"`
+	BackendImage string `json:"backendImage,omitempty"`
+	Hostname     string `json:"hostname,omitempty"`
+	EntryPort    int    `json:"entryPort,omitempty"`
+	IngressClass string `json:"ingressClass,omitempty"`
+	StorageClass string `json:"storageClass,omitempty"`
+
+	// The class each volume actually used, after the fallback above. Always
+	// populated, so reading this back never requires redoing that fallback in
+	// your head -- status is fact.
+	DataStorageClass  string `json:"dataStorageClass,omitempty"`
+	UIStorageClass    string `json:"uiStorageClass,omitempty"`
+	CacheStorageClass string `json:"cacheStorageClass,omitempty"`
+
 	ClusterIssuer     string `json:"clusterIssuer,omitempty"`
 	IssuerKind        string `json:"issuerKind,omitempty"`
 	NestedPodCIDR     string `json:"nestedPodCidr,omitempty"`

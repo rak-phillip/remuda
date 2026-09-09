@@ -94,6 +94,12 @@ type renderSpec struct {
 	IssuerKind    string
 	ACME          map[string]any
 
+	// Per-role overrides for StorageClass. Empty means "use StorageClass",
+	// which is what every environment written before these existed does.
+	DataStorageClass  string
+	UIStorageClass    string
+	CacheStorageClass string
+
 	DataSizeGB  int
 	UISizeGB    int
 	CacheSizeGB int
@@ -255,11 +261,44 @@ func (s *renderSpec) pvc(suffix string, sizeGB int, role string) *corev1.Persist
 
 	// Omitted entirely when the cluster has no default class, rather than sent
 	// as an explicit empty string the API server would take literally.
-	if s.StorageClass != "" {
-		claim.Spec.StorageClassName = &s.StorageClass
+	if class := s.storageClassFor(role); class != "" {
+		claim.Spec.StorageClassName = &class
 	}
 
 	return claim
+}
+
+// storageClassFor picks the class for one volume, falling back to the
+// environment-wide StorageClass.
+//
+// The three volumes are not equally valuable and do not deserve the same
+// storage. `data` is the nested k3s's etcd and is the only one whose loss is
+// unrecoverable; `ui` holds a bundle rebuilt from git in minutes, and `cache`
+// is a yarn cache whose loss costs nothing. Putting `data` on a network-attached
+// class while the other two stay on something node-local is the point of this.
+//
+// Splitting the classes can split scheduling: with WaitForFirstConsumer, three
+// volumes on one node-local class pin every pod to one node, and moving `data`
+// alone to a network-attached class lets the backend land away from the build.
+// That is fine -- they talk over Services -- and `ui`, which the ui Deployment
+// and the build Job both mount, still shares one class and so still co-locates.
+func (s *renderSpec) storageClassFor(role string) string {
+	var override string
+
+	switch role {
+	case RoleBackend:
+		override = s.DataStorageClass
+	case RoleUI:
+		override = s.UIStorageClass
+	case RoleBuild:
+		override = s.CacheStorageClass
+	}
+
+	if override != "" {
+		return override
+	}
+
+	return s.StorageClass
 }
 
 // k3sConfig is the config file for the k3s the backend image starts inside its
