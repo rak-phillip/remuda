@@ -231,6 +231,19 @@ export function environmentCrBody(spec: Partial<RemudaSpec> & {
 }
 
 /**
+ * Where a CR is read and written, which is always the host cluster.
+ *
+ * Never the `clusterId` the operations below are handed. Every caller passes the
+ * cluster the environment *runs* on, which is right for a legacy record and for
+ * every workload object -- but a CR stays on the host whatever it targets, so
+ * addressing it through the target asks a cluster with no Environment CRD at all.
+ * See createEnvironmentCr().
+ */
+const crUrl = (record: EnvironmentRecord): string => resourceUrl(
+  HOST_CLUSTER_ID, ENDPOINTS.environment, record.spec.namespace, record.spec.name
+);
+
+/**
  * Start or stop an environment, whichever record backs it.
  *
  * For a CR this is one field on the spec and the controller does the scaling,
@@ -248,7 +261,7 @@ export async function setRecordRunning(
     return setEnvironmentRunning(store, clusterId, record.spec, running);
   }
 
-  const url = resourceUrl(clusterId, ENDPOINTS.environment, record.spec.namespace, record.spec.name);
+  const url = crUrl(record);
   const existing = await store.dispatch('management/request', { url });
 
   if (existing?.spec?.running === running) {
@@ -279,7 +292,8 @@ export async function deleteRecord(
     return deleteEnvironment(store, clusterId, record.spec);
   }
 
-  await remove(store, clusterId, ENDPOINTS.environment, record.spec.namespace, record.spec.name);
+  // The host, not clusterId -- see crUrl().
+  await remove(store, HOST_CLUSTER_ID, ENDPOINTS.environment, record.spec.namespace, record.spec.name);
 }
 
 /**
