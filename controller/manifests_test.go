@@ -572,6 +572,9 @@ func TestK3sConfig(t *testing.T) {
 		`  - "10.45.0.0/16"`,
 		"cluster-dns:",
 		`  - "10.45.0.10"`,
+		// Without it the second start of every environment crashloops on the
+		// node IP the last pod left behind. See k3sConfig.
+		"disable-network-policy: true",
 		"",
 	}, "\n")
 

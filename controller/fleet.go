@@ -86,6 +86,11 @@ func (d *directBackend) Apply(ctx context.Context, spec *renderSpec, password, b
 		return err
 	}
 
+	// Before scaling, so a start reads the config it is about to be given.
+	if err := d.c.syncK3sConfig(ctx, spec); err != nil {
+		return err
+	}
+
 	return d.c.setRunning(ctx, spec, running)
 }
 

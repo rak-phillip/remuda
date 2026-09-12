@@ -660,6 +660,46 @@ func (c *controller) scale(ctx context.Context, namespace, name string, replicas
 	return nil
 }
 
+// syncK3sConfig brings an existing environment's k3s config up to what this
+// controller renders -- the second exception to create-if-absent, after replicas.
+//
+// provision() never touches an object that already exists, so a setting added to
+// k3sConfig would otherwise reach only environments created after it. The one
+// that forced this, disable-network-policy, is not optional: an environment
+// without it crashloops on its next start. Downstream needs no equivalent,
+// because the Bundle carries the new render and Fleet applies it.
+//
+// Safe to own outright where the rest is not: the file is derived entirely from
+// resolved fields rather than being something people tune by hand, and k3s reads
+// it only at start, so rewriting it restarts nothing.
+func (c *controller) syncK3sConfig(ctx context.Context, spec *renderSpec) error {
+	desired := spec.k3sConfig()
+
+	current, err := c.core.CoreV1().ConfigMaps(spec.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+	if err != nil {
+		// Not created yet is provision()'s to fix, on this pass or the next.
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+
+		return fmt.Errorf("reading %s: %w", desired.Name, err)
+	}
+
+	if reflect.DeepEqual(current.Data, desired.Data) {
+		return nil
+	}
+
+	current.Data = desired.Data
+
+	if _, err := c.core.CoreV1().ConfigMaps(spec.Namespace).Update(ctx, current, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("updating %s: %w", desired.Name, err)
+	}
+
+	log.Printf("%s: updated ConfigMap %s", spec.Name, desired.Name)
+
+	return nil
+}
+
 // observe reads the environment's real state back and records it.
 // observeDirect reads an environment's real state back off the cluster it runs
 // on. Only available for the host cluster; see fleetBackend.Observe for what

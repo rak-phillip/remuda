@@ -309,6 +309,24 @@ func (s *renderSpec) storageClassFor(role string) string {
 // that command line, so the file is free to set them -- and it is the only lever
 // available, because the image entrypoint sends trailing args to `rancher`, not
 // to `k3s`.
+//
+// disable-network-policy is what lets an environment start a second time. The
+// nested node is named local-node for life but takes the pod's IP, and a pod gets
+// a new IP on every start, while the Node object in the etcd on the data volume
+// still lists the last one. kube-router's network policy controller looks for a
+// local interface carrying that stored IP, finds none, and k3s shuts down:
+//
+//	failed to start networking: unable to initialize network policy controller:
+//	error getting node subnet: failed to find interface with specified node ip
+//
+// Every start after the first, forever -- Rancher only reports the apiserver
+// going away, as `[FATAL] ... unexpected EOF`. Measured on k3s v1.36.4+k3s1,
+// after k3s-io/k3s#12891 was meant to fix it: that waits for a fresh Ready
+// heartbeat, but with --cloud-provider=external the addresses are written by the
+// embedded cloud controller rather than by the kubelet, and the heartbeat can
+// land first. Upstream treats a changing node IP as unsupported (#12639, #12844)
+// and names this setting as the workaround. Nothing here needs NetworkPolicy
+// enforced; a dev Rancher is not a multi-tenant cluster.
 func (s *renderSpec) k3sConfig() *corev1.ConfigMap {
 	config := strings.Join([]string{
 		"cluster-cidr:",
@@ -317,6 +335,7 @@ func (s *renderSpec) k3sConfig() *corev1.ConfigMap {
 		fmt.Sprintf("  - %q", s.NestedServiceCIDR),
 		"cluster-dns:",
 		fmt.Sprintf("  - %q", ClusterDNSFor(s.NestedServiceCIDR)),
+		"disable-network-policy: true",
 		"",
 	}, "\n")
 
