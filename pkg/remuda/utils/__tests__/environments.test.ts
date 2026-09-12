@@ -163,7 +163,8 @@ describe('CR operations', () => {
       dispatch: (_action: string, req: any) => {
         calls.push(req);
 
-        return Promise.resolve(req.method ? {} : body);
+        // An update answers with the object as stored, as the API server does.
+        return Promise.resolve(req.method === 'PUT' ? req.data : req.method ? {} : body);
       },
     };
   }
@@ -171,7 +172,7 @@ describe('CR operations', () => {
   it('writes a fresh rebuild token onto the CR, keeping everything else', async() => {
     const store = crStore(existing());
 
-    await rebuildRecord(store, TARGET, recordOf(existing()), new Date(TOKEN_TIME));
+    expect(await rebuildRecord(store, TARGET, recordOf(existing()), new Date(TOKEN_TIME))).toBe(true);
 
     const put = store.calls.find((c) => c.method === 'PUT');
 
@@ -179,6 +180,17 @@ describe('CR operations', () => {
     expect(put.data.spec.running).toBe(true);
     // Steve rejects an update carrying no resourceVersion.
     expect(put.data.metadata.resourceVersion).toBe('4242');
+  });
+
+  it('reports a rebuild the CRD pruned rather than calling it started', async() => {
+    // An rc.10 CRD has no rebuildRequest. The PUT succeeds with only a warning,
+    // and the stored object comes back without the token.
+    const store = crStore(existing());
+    const dispatch = store.dispatch;
+
+    store.dispatch = (action: string, req: any) => (req.method === 'PUT' ? dispatch(action, { ...req, data: existing() }) : dispatch(action, req));
+
+    expect(await rebuildRecord(store, TARGET, recordOf(existing()), new Date(TOKEN_TIME))).toBe(false);
   });
 
   it('addresses the CR on the host cluster, whichever cluster it targets', async() => {

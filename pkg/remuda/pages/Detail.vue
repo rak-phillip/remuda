@@ -13,6 +13,7 @@ import { hopAddresses, list, resourceUrl, resyncHop } from '../utils/api';
 import { ingressEntry } from '../utils/discovery';
 import { hopHasDrifted } from '../utils/hop';
 import { isIncomplete, runStateOf } from '../utils/status';
+import { EXTENSION_VERSION } from '../utils/controller';
 import {
   crIncomplete, crRunState, deleteRecord, findEnvironment, rebuildPending, rebuildRecord, setRecordRunning
 } from '../utils/environments';
@@ -243,7 +244,15 @@ async function resync(cb: (ok: boolean) => void) {
 
 async function rebuild(cb: (ok: boolean) => void) {
   try {
-    await rebuildRecord(store, clusterId, record.value as EnvironmentRecord);
+    // A CRD older than the extension prunes the request without an error, and a
+    // success here would say a build started when none ever will.
+    if (!await rebuildRecord(store, clusterId, record.value as EnvironmentRecord)) {
+      error.value = i18n.t('remuda.error.rebuildUnsupported', { version: EXTENSION_VERSION });
+      cb(false);
+
+      return;
+    }
+
     await load();
     cb(true);
   } catch (e: any) {

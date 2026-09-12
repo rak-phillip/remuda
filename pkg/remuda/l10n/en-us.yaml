@@ -284,11 +284,24 @@ remuda:
       This Rancher is reached by address rather than by name, so there is no
       domain to give an environment a hostname under.
 
+  controllerUpgrade:
+    title: Remuda controller
+    started: >-
+      Upgrading remuda-controller to {version} to match the extension. Environments
+      keep running; builds and rebuilds resume once the controller restarts.
+    failed: >-
+      Could not upgrade remuda-controller to {version}, so it no longer matches the
+      extension: {error}
+
   error:
     createFailed: Could not create the environment
     loadFailed: Could not load environments
     deleteFailed: Could not delete the environment
     rebuildFailed: Could not start the rebuild
+    rebuildUnsupported: >-
+      The Remuda controller installed on this Rancher is too old to rebuild an
+      environment, so the request was discarded. Upgrade remuda-controller to
+      {version} and try again.
     storageInstallFailed: Could not install local-path storage on this cluster
     controllerMissing: >-
       The Remuda controller is not installed, so nothing would build this

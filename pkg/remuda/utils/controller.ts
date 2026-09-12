@@ -1,8 +1,10 @@
+import { lt, valid } from 'semver';
 import { ENDPOINTS, ENVIRONMENT_CRD, HOST_CLUSTER_ID } from './constants';
 import { clusterResourceUrl, collectionUrl } from './api';
 
 /**
- * Installing remuda-controller from inside the extension.
+ * Installing remuda-controller from inside the extension, and keeping it at the
+ * extension's version afterwards.
  *
  * The controller is not optional from 0.2.0 -- it is what builds an environment
  * and what serves the Environment API -- but it ships as a separate chart,
@@ -72,7 +74,9 @@ export async function controllerAvailable(store: any, clusterId = HOST_CLUSTER_I
  * flattened `authorization.k8s.io.selfsubjectaccessreviews` rejects the POST
  * with a 422, because the resource exists only to be created and never listed.
  */
-export async function canInstallController(store: any, clusterId = HOST_CLUSTER_ID): Promise<boolean> {
+export async function canInstallController(
+  store: any, clusterId = HOST_CLUSTER_ID, verb: 'create' | 'update' = 'create',
+): Promise<boolean> {
   try {
     const res = await store.dispatch('management/request', {
       url:    `/k8s/clusters/${ clusterId }/apis/authorization.k8s.io/v1/selfsubjectaccessreviews`,
@@ -82,7 +86,7 @@ export async function canInstallController(store: any, clusterId = HOST_CLUSTER_
         kind:       'SelfSubjectAccessReview',
         spec:       {
           resourceAttributes: {
-            group: 'apiextensions.k8s.io', resource: 'customresourcedefinitions', verb: 'create',
+            group: 'apiextensions.k8s.io', resource: 'customresourcedefinitions', verb,
           },
         },
       },
@@ -159,23 +163,153 @@ export async function installController(store: any, chart: ControllerChart): Pro
   await store.dispatch('management/request', {
     url:    `${ CLUSTER_REPOS }/${ chart.repo }?action=install`,
     method: 'POST',
-    data:   {
-      charts: [{
-        chartName:   CONTROLLER_CHART,
-        version:     chart.version,
-        releaseName: CONTROLLER_CHART,
-        values:      {},
-        annotations: {
-          'catalog.cattle.io/ui-source-repo':      chart.repo,
-          'catalog.cattle.io/ui-source-repo-type': 'cluster',
-        },
-      }],
-      namespace: CONTROLLER_NAMESPACE,
-      noHooks:   false,
-      timeout:   '600s',
-      wait:      true,
-    },
+    data:   chartAction(chart, {}),
   });
+}
+
+/** The body the Apps install and upgrade pages send, for this one chart. */
+function chartAction(chart: ControllerChart, values: Record<string, any>) {
+  return {
+    charts: [{
+      chartName:   CONTROLLER_CHART,
+      version:     chart.version,
+      releaseName: CONTROLLER_CHART,
+      values,
+      annotations: {
+        'catalog.cattle.io/ui-source-repo':      chart.repo,
+        'catalog.cattle.io/ui-source-repo-type': 'cluster',
+      },
+    }],
+    namespace: CONTROLLER_NAMESPACE,
+    noHooks:   false,
+    timeout:   '600s',
+    wait:      true,
+  };
+}
+
+/**
+ * Keeping the controller at the extension's version.
+ *
+ * The two ship from one tag and change together -- a field the extension writes
+ * is a field the CRD has to declare -- but Rancher's Extensions screen upgrades
+ * only the extension's own chart. Left there, every extension upgrade is a skew:
+ * an rc.11 extension over an rc.10 controller wrote spec.rebuildRequest, the
+ * rc.10 CRD pruned it with nothing but a warning, and Rebuild did nothing.
+ *
+ * Bundling the controller into the extension's chart would close that inside one
+ * Helm release, and cannot be done from here. The upstream publish script builds
+ * that chart from a fixed template with no way to add to it, and every existing
+ * install has a `remuda-controller` release owning the CRD: Helm refuses to
+ * render a resource another release owns, and checks that before running any
+ * pre-upgrade hook that could have handed it over.
+ *
+ * So the extension closes it instead, the first time it loads after an upgrade.
+ * The Extensions screen asks for a reload once an extension changes, which makes
+ * the admin who clicked Upgrade the first to run the new code -- one click, as
+ * far as they can tell.
+ */
+
+const CONTROLLER_APP = `/v1/catalog.cattle.io.apps/${ CONTROLLER_NAMESPACE }/${ CONTROLLER_CHART }`;
+
+export interface InstalledController {
+  version: string;
+  /**
+   * The non-default values it was installed with. Rancher's upgrade action
+   * writes only the values it is sent, so these have to travel with it or an
+   * upgrade silently resets, say, an air-gapped image repository.
+   */
+  values: Record<string, any>;
+  /** A Helm operation on the release has started and not finished. */
+  busy: boolean;
+}
+
+/** The controller release as Rancher's catalog sees it, if there is one this user can read. */
+export async function installedController(store: any): Promise<InstalledController | undefined> {
+  try {
+    const app = await store.dispatch('management/request', { url: CONTROLLER_APP });
+    const version = app?.spec?.chart?.metadata?.version;
+
+    if (!version) {
+      return undefined;
+    }
+
+    return {
+      version,
+      values: app.spec.values || {},
+      busy:   `${ app.spec.info?.status || '' }`.startsWith('pending-'),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether the installed controller is older than the one wanted.
+ *
+ * SemVer rather than the shell's compare(), which ranks 0.2.0-rc.11 above 0.2.0
+ * and would leave a candidate controller under a production extension forever.
+ *
+ * Only ever forwards. An extension rolled back sits happily on a newer
+ * controller, whose CRD still declares every field the older extension writes;
+ * the reverse is the bug this exists to prevent.
+ */
+export function controllerBehind(installed: string, wanted: string): boolean {
+  return !!valid(installed) && !!valid(wanted) && lt(installed, wanted);
+}
+
+export type ControllerUpgrade = 'absent' | 'current' | 'busy' | 'forbidden' | 'no-chart' | 'upgraded';
+
+/**
+ * Upgrade the controller to the extension's version when it is behind, and say
+ * what happened.
+ *
+ * Runs on every dashboard load, so the checks are ordered cheapest first and the
+ * common answer -- already current -- costs one request. Everything short of the
+ * upgrade itself answers rather than throws; the upgrade throws, because a
+ * failed one is worth hearing about.
+ *
+ * - absent: nothing to upgrade. Installing is the Create page's, with its own
+ *   explanation of who has to act.
+ * - busy: an operation is already running, most likely this same upgrade started
+ *   from another tab. Starting a second would only fail on Helm's release lock.
+ * - forbidden: this user cannot update a CRD. The next admin to load the
+ *   dashboard will.
+ * - no-chart: no repository carries the extension's own version. Not the newest
+ *   instead, as installing falls back to -- an upgrade nobody asked for must not
+ *   land on a version nobody chose.
+ */
+export async function upgradeControllerIfBehind(store: any): Promise<ControllerUpgrade> {
+  const installed = await installedController(store);
+
+  if (!installed) {
+    return 'absent';
+  }
+
+  if (!controllerBehind(installed.version, EXTENSION_VERSION)) {
+    return 'current';
+  }
+
+  if (installed.busy) {
+    return 'busy';
+  }
+
+  if (!await canInstallController(store, HOST_CLUSTER_ID, 'update')) {
+    return 'forbidden';
+  }
+
+  const chart = await findControllerChart(store);
+
+  if (chart?.version !== EXTENSION_VERSION) {
+    return 'no-chart';
+  }
+
+  await store.dispatch('management/request', {
+    url:    `${ CLUSTER_REPOS }/${ chart.repo }?action=upgrade`,
+    method: 'POST',
+    data:   chartAction(chart, installed.values),
+  });
+
+  return 'upgraded';
 }
 
 /**
