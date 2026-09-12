@@ -1,6 +1,6 @@
 import {
-  CONTROLLER_CHART, CONTROLLER_NAMESPACE, EXTENSION_VERSION, canInstallController,
-  controllerAvailable, environmentApiReady, findControllerChart, installController,
+  CONTROLLER_CHART, CONTROLLER_NAMESPACE, EXTENSION_VERSION, canInstallController, controllerAvailable,
+  controllerBehind, environmentApiReady, findControllerChart, installController, upgradeControllerIfBehind,
   waitForController
 } from '../controller';
 
@@ -195,5 +195,135 @@ describe('installController', () => {
   it('does not swallow a failed install', async() => {
     // Unlike the probes, this one the user is waiting on and must hear about.
     await expect(installController(storeOf(() => new Error('403 forbidden')), { repo: 'remuda-rc', version: '0.2.0-rc.5' })).rejects.toThrow('403 forbidden');
+  });
+});
+
+describe('controllerBehind', () => {
+  it('orders candidates as SemVer does', () => {
+    // Numerically, not as strings: rc.10 sorts after rc.9 as text.
+    expect(controllerBehind('0.2.0-rc.10', '0.2.0-rc.11')).toBe(true);
+    expect(controllerBehind('0.2.0-rc.9', '0.2.0-rc.10')).toBe(true);
+    // The shell's compare() ranks the candidate above its own release.
+    expect(controllerBehind('0.2.0-rc.11', '0.2.0')).toBe(true);
+  });
+
+  it('never asks for a downgrade', () => {
+    expect(controllerBehind('0.2.0', '0.2.0-rc.11')).toBe(false);
+    expect(controllerBehind('0.2.0-rc.11', '0.2.0-rc.11')).toBe(false);
+  });
+
+  it('leaves a version it cannot read alone', () => {
+    expect(controllerBehind('dev', '0.2.0')).toBe(false);
+  });
+});
+
+describe('upgradeControllerIfBehind', () => {
+  const OLDER = '0.0.1';
+
+  /**
+   * A Rancher with the controller installed at `version`. Every request is
+   * answered, so a test that expects no upgrade can assert no POST reached the
+   * repository rather than rely on one failing.
+   */
+  const rancher = ({
+    version = OLDER, values = undefined as any, status = 'deployed', allowed = true, available = [EXTENSION_VERSION],
+  } = {}) => storeOf((req: any) => {
+    if (req.url.includes('catalog.cattle.io.apps')) {
+      return version ? {
+        spec: {
+          chart: { metadata: { version } }, values, info: { status }
+        }
+      } : new Error('404');
+    }
+
+    if (req.url.includes('selfsubjectaccessreviews')) {
+      return { status: { allowed } };
+    }
+
+    if (req.url.endsWith('clusterrepos')) {
+      return repoList(['remuda-rc']);
+    }
+
+    if (req.url.includes('link=index')) {
+      return { entries: { [CONTROLLER_CHART]: available.map((v) => ({ version: v })) } };
+    }
+
+    return { operationName: 'helm-operation-x' };
+  });
+
+  const upgrades = (store: ReturnType<typeof rancher>) => store.calls.filter((c: any) => c.url.includes('action='));
+
+  it('upgrades an older controller to the extension\'s version, keeping its values', async() => {
+    // Rancher's upgrade action writes only the values it is sent.
+    const values = { image: { repository: 'registry.internal/remuda-controller' } };
+    const store = rancher({ values });
+
+    expect(await upgradeControllerIfBehind(store)).toBe('upgraded');
+
+    const [req] = upgrades(store);
+
+    expect(req.url).toBe('/v1/catalog.cattle.io.clusterrepos/remuda-rc?action=upgrade');
+    expect(req.method).toBe('POST');
+    expect(req.data.namespace).toBe(CONTROLLER_NAMESPACE);
+    expect(req.data.charts[0]).toMatchObject({
+      chartName: CONTROLLER_CHART, version: EXTENSION_VERSION, releaseName: CONTROLLER_CHART, values,
+    });
+  });
+
+  it('asks for the update verb, since the CRD already exists', async() => {
+    const store = rancher();
+
+    await upgradeControllerIfBehind(store);
+
+    const review = store.calls.find((c: any) => c.url.includes('selfsubjectaccessreviews'));
+
+    expect(review.data.spec.resourceAttributes.verb).toBe('update');
+  });
+
+  it('costs one request when the controller is already current', async() => {
+    // The answer on every dashboard load but the one after an upgrade.
+    const store = rancher({ version: EXTENSION_VERSION });
+
+    expect(await upgradeControllerIfBehind(store)).toBe('current');
+    expect(store.calls).toHaveLength(1);
+  });
+
+  it('leaves a missing controller to the Create page', async() => {
+    const store = rancher({ version: '' });
+
+    expect(await upgradeControllerIfBehind(store)).toBe('absent');
+    expect(upgrades(store)).toHaveLength(0);
+  });
+
+  it('does not start a second operation while one is running', async() => {
+    // Most likely this same upgrade, started from another tab.
+    const store = rancher({ status: 'pending-upgrade' });
+
+    expect(await upgradeControllerIfBehind(store)).toBe('busy');
+    expect(upgrades(store)).toHaveLength(0);
+  });
+
+  it('does nothing for a user who may not update the CRD', async() => {
+    const store = rancher({ allowed: false });
+
+    expect(await upgradeControllerIfBehind(store)).toBe('forbidden');
+    expect(upgrades(store)).toHaveLength(0);
+  });
+
+  it('does not land on a version other than the extension\'s', async() => {
+    // Installing falls back to the newest; an upgrade nobody asked for must not.
+    const store = rancher({ available: ['999.0.0', OLDER] });
+
+    expect(await upgradeControllerIfBehind(store)).toBe('no-chart');
+    expect(upgrades(store)).toHaveLength(0);
+  });
+
+  it('does not swallow a failed upgrade', async() => {
+    const store = rancher();
+    const dispatch = store.dispatch;
+
+    store.dispatch = (action: string, req: any) => (req.url.includes('action=upgrade') ? Promise.reject(new Error('409 conflict')) : dispatch(action, req));
+
+    await expect(upgradeControllerIfBehind(store)).rejects.toThrow('409 conflict');
   });
 });

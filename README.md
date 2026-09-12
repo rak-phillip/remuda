@@ -401,6 +401,13 @@ versions.
 `remuda-controller` appears under **Apps → Charts** in the same repository. Install it into
 `cattle-remuda-system`.
 
+**Upgrading needs no second step.** Rancher's Extensions screen upgrades only the extension's own
+chart, so the extension carries the controller with it: the first time an admin loads the dashboard
+on a new version — the reload the Extensions screen asks for — it upgrades `remuda-controller` to the
+same version, keeping whatever values it was installed with. It only ever moves forward, only to the
+extension's exact version, and only for a user who may update the CRD; anyone else's load leaves it
+for the next admin.
+
 > **On the candidate channel, turn on prereleases first.** Every candidate version is a SemVer
 > pre-release, and **Apps → Charts hides pre-release versions by default** — a chart with no
 > remaining versions is dropped from the list entirely, so the repository looks empty rather than
