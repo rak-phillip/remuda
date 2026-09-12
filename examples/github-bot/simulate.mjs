@@ -3,9 +3,15 @@
 // them the way GitHub does, and sends them to the bot.
 //
 //   WEBHOOK_SECRET=... node simulate.mjs <scenario> [--pr owner/repo#number] [--url http://localhost:8787/webhook]
+//
+// Or writes the event for action.mjs instead, and prints the event name a
+// workflow would receive:
+//
+//   node simulate.mjs <scenario> --event-file /tmp/event.json
 
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { LABEL, sign } from './plan.mjs';
 
 const [scenario, ...rest] = process.argv.slice(2);
@@ -17,6 +23,7 @@ const option = (flag, fallback) => {
 
 const url = option('--url', 'http://localhost:8787/webhook');
 const prRef = option('--pr', 'rancher/dashboard#18994');
+const eventFile = option('--event-file');
 const secret = process.env.WEBHOOK_SECRET;
 
 /**
@@ -80,13 +87,33 @@ async function deliver(name, pr, key = secret) {
   console.log(JSON.stringify(await res.json(), null, 2));
 }
 
-const known = [...Object.keys(scenarios), 'bad-signature'];
+/**
+ * The event as Actions hands it to a step: a payload file, and a name.
+ *
+ * The workflow listens for pull_request_target, whose payload is exactly the
+ * pull_request one, so that is the name printed. There is no signature to get
+ * wrong here, which is why bad-signature has no event file.
+ */
+function writeEvent(name, pr) {
+  const [event, payload] = scenarios[name](pr);
 
-if (!secret || !known.includes(scenario)) {
+  writeFileSync(eventFile, JSON.stringify(payload));
+  console.log(event === 'pull_request' ? 'pull_request_target' : event);
+}
+
+const known = [...Object.keys(scenarios), 'bad-signature'];
+const usable = eventFile ? known.includes(scenario) && scenario !== 'bad-signature' : secret && known.includes(scenario);
+
+if (!usable) {
   console.error(`usage: WEBHOOK_SECRET=... node simulate.mjs <${ known.join('|') }> [--pr owner/repo#number] [--url ...]`);
+  console.error(`       node simulate.mjs <${ Object.keys(scenarios).join('|') }> [--pr owner/repo#number] --event-file <path>`);
   process.exit(2);
 }
 
 const pr = pullRequest(prRef);
 
-await deliver(scenario, pr, scenario === 'bad-signature' ? `${ secret }-wrong` : secret);
+if (eventFile) {
+  writeEvent(scenario, pr);
+} else {
+  await deliver(scenario, pr, scenario === 'bad-signature' ? `${ secret }-wrong` : secret);
+}

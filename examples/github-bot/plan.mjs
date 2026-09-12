@@ -160,6 +160,9 @@ export function planCreate(pr, config, reason) {
 export function planFor(event, payload, config = {}) {
   switch (event) {
   case 'pull_request':
+  // What the workflow receives. The payload is pull_request's; the difference is
+  // only that the workflow and its secrets come from the base repository.
+  case 'pull_request_target':
     return planForPullRequest(payload, config);
   case 'issue_comment':
     return planForComment(payload, config);

@@ -66,6 +66,13 @@ test('starts every name with a letter, as a Service name must', () => {
   assert.equal(environmentName('acme/---', 7), 'gh-pr-7');
 });
 
+test('treats pull_request_target, which the workflow receives, as a pull_request', () => {
+  const delivered = delivery('labeled', labelled(pr()), { label: { name: 'remuda' } });
+
+  assert.equal(planFor('pull_request_target', delivered).action, 'create');
+  assert.deepEqual(planFor('pull_request_target', delivered), planFor('pull_request', delivered));
+});
+
 test('builds a fork from the fork', () => {
   const env = environmentFor(pr());
 

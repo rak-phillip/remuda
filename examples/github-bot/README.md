@@ -65,6 +65,35 @@ To take real deliveries from GitHub on a laptop, point a repository webhook at a
 | `REMUDA_DRY_RUN=1` | validate writes against the real API server, persist nothing |
 | `WATCH=0` | do not follow a new environment until it answers |
 
+## As a GitHub Actions workflow
+
+`action.mjs` is the same bot as a workflow step, and `workflow.yml` is the workflow. There is no
+server, no public endpoint and no webhook secret — GitHub runs the step for the event itself — and
+comments come from `github-actions[bot]` through the run's own token.
+
+It listens for `pull_request_target` rather than `pull_request`, so the workflow and its secrets come
+from the base repository and a pull request cannot rewrite either. That is only safe because the job
+never checks out the pull request: the one thing it runs is this directory, pinned to a commit.
+
+On the repository the pull requests are opened against:
+
+1. Put `workflow.yml` at `.github/workflows/remuda.yml` on the **default branch**, with `RANCHER_URL`
+   and the pinned commit filled in. `issue_comment` only runs workflows from the default branch.
+2. `gh label create remuda --repo <owner>/<repo> --description "Build a Remuda environment for this pull request"`
+3. `gh secret set REMUDA_TOKEN --repo <owner>/<repo>`, with a Rancher API token that can manage
+   Environments.
+
+A run holds its runner until the environment answers, so the comment with the URL comes from it, for
+up to `WATCH_TIMEOUT_MINUTES` (default 20). A later event on the same pull request cancels that wait.
+
+To try the step locally, have the simulator write the event and run it the way Actions would:
+
+```sh
+export GITHUB_EVENT_PATH=/tmp/event.json
+export GITHUB_EVENT_NAME="$(node simulate.mjs label --pr <owner>/<repo>#<n> --event-file "$GITHUB_EVENT_PATH")"
+RANCHER_URL=https://<rancher> REMUDA_TOKEN=token-xxxxx:yyyy REMUDA_DRY_RUN=1 node action.mjs
+```
+
 ## Running it for real
 
 Run it as a Deployment on the host cluster with the ServiceAccount in `rbac.yaml`, which can touch
