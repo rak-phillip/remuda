@@ -8,6 +8,7 @@ import {
   issuerManifest,
   labelsFor,
   resourceBase,
+  servesTrustedCertificate,
   sharedDashboardIndexUrl,
   uiNginxConfigManifest,
 } from '../manifests';
@@ -17,7 +18,7 @@ import {
   LABEL_OWNER,
   UI_BUNDLE_PATH,
 } from '../constants';
-import type { RemudaSpec } from '../../types';
+import type { HopSpec, RemudaSpec } from '../../types';
 
 const spec: RemudaSpec = {
   name:          'multi-idp',
@@ -114,6 +115,41 @@ describe('sharedDashboardIndexUrl', () => {
     expect(sharedDashboardIndexUrl({ ...spec, entryPort: 8443 })).toBe(
       `https://${ spec.hostname }:8443/${ UI_BUNDLE_PATH }/index.html`
     );
+  });
+});
+
+describe('servesTrustedCertificate', () => {
+  const hop: HopSpec = {
+    hostClusterId:   'local',
+    targetClusterId: 'c-m-9jprk9c6',
+    addresses:       ['32.189.135.29'],
+    addressType:     'ExternalIP',
+    port:            443,
+    ingressClass:    'traefik',
+  };
+
+  it('asks a direct environment its own issuer', () => {
+    expect(servesTrustedCertificate(spec)).toBe(true);
+    expect(servesTrustedCertificate({ ...spec, clusterIssuer: undefined })).toBe(false);
+  });
+
+  // The shape the controller writes for every downstream environment: TLS
+  // terminates on the host, so the issuer is on the hop and the top level is
+  // empty. This is the case the detail page used to call self-signed.
+  it('asks a hop environment the host issuer on its hop', () => {
+    expect(servesTrustedCertificate({
+      ...spec,
+      clusterIssuer: undefined,
+      hop:           {
+        ...hop, clusterIssuer: 'remuda-le', issuerKind: 'Issuer'
+      },
+    })).toBe(true);
+  });
+
+  it('ignores the target issuer once a hop fronts the environment', () => {
+    expect(servesTrustedCertificate({
+      ...spec, clusterIssuer: 'remuda-le', hop
+    })).toBe(false);
   });
 });
 

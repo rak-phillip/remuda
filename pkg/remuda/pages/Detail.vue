@@ -18,7 +18,7 @@ import { isIncomplete, runStateOf } from '../utils/status';
 import {
   canRebuild, crIncomplete, crRunState, deleteRecord, findEnvironment, setRecordRunning
 } from '../utils/environments';
-import { environmentUrl, resourceBase, sharedDashboardIndexUrl } from '../utils/manifests';
+import { environmentUrl, resourceBase, servesTrustedCertificate, sharedDashboardIndexUrl } from '../utils/manifests';
 import {
   BLANK_CLUSTER, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME, PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
   BOOTSTRAP_USERNAME
@@ -62,7 +62,7 @@ const indexUrl = computed(() => (spec.value ? sharedDashboardIndexUrl(spec.value
 // like any other client. Without an issuer the ingress has no TLS block and
 // traefik answers with its own self-signed default, which that fetch rejects --
 // so the URL is still worth showing, but it will not work off this host as-is.
-const indexTrusted = computed(() => !!spec.value?.clusterIssuer);
+const indexTrusted = computed(() => !!spec.value && servesTrustedCertificate(spec.value));
 
 const latestJob = computed(() => [...jobs.value]
   .sort((a, b) => (b.metadata?.creationTimestamp || '').localeCompare(a.metadata?.creationTimestamp || ''))[0]);
