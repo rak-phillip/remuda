@@ -314,22 +314,33 @@ export async function deleteRecord(
  * browser still replaces the Job itself.
  *
  * Read-modify-write for the same reason as setRecordRunning().
+ *
+ * Reports whether the request was kept. A CRD older than 0.2.0-rc.11 has no
+ * rebuildRequest, and the API server prunes an unknown field with a warning
+ * rather than an error: the PUT succeeds, the token is gone, and nothing will
+ * ever build. Measured on an rc.11 extension over an rc.10 controller. So the
+ * saved object is checked, not the status code.
  */
 export async function rebuildRecord(
   store: any, clusterId: string, record: EnvironmentRecord, now: Date = new Date(),
-): Promise<void> {
+): Promise<boolean> {
   if (record.source === 'legacy') {
-    return rebuildUi(store, clusterId, record.spec);
+    await rebuildUi(store, clusterId, record.spec);
+
+    return true;
   }
 
   const url = crUrl(record);
   const existing = await store.dispatch('management/request', { url });
+  const token = now.toISOString();
 
-  await store.dispatch('management/request', {
+  const saved = await store.dispatch('management/request', {
     url,
     method: 'PUT',
-    data:   { ...existing, spec: { ...existing.spec, rebuildRequest: now.toISOString() } },
+    data:   { ...existing, spec: { ...existing.spec, rebuildRequest: token } },
   });
+
+  return saved?.spec?.rebuildRequest === token;
 }
 
 /**
