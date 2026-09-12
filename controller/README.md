@@ -71,9 +71,21 @@ Environment, so `kubectl delete environment` collects the lot — build pods inc
 has to sweep those by hand, because a `DELETE` on a Job defaults to Orphan propagation and the
 stranded pod then blocks its PVCs from ever finalising.
 
-**The build Job is only ever started once.** A Job is immutable, so a rebuild is a fresh Job with a
-fresh name; doing that on a schedule would rebuild every environment every interval. Triggering a
-rebuild is still the UI's.
+**A build starts once, and again only when asked.** A Job is immutable, so a rebuild is a fresh Job
+with a fresh name, and `status.buildId` is that name. It moves only when `spec.rebuildRequest` holds
+something other than `status.observedRebuildRequest` — never on a schedule, which would rebuild every
+environment every interval. The value is an opaque token compared for change, so this asks for one,
+and it is the same field the extension's Rebuild UI writes:
+
+```sh
+kubectl -n rancher-remuda patch renv <name> --type merge \
+  -p "{\"spec\":{\"rebuildRequest\":\"$(date -u +%FT%TZ)\"}}"
+```
+
+A token rather than a `rebuild: true` flag, because the controller writes only status and could never
+reset a flag it had acted on. On the host cluster it deletes the superseded Job itself, with Background
+propagation so the old pod does not strand the ui and cache claims. Downstream the Bundle only ever
+declares the current Job, so the old one leaves the release when its name changes.
 
 ### Resolution reads the host cluster
 

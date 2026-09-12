@@ -3,7 +3,7 @@ import {
   REMUDA_NS,
 } from './constants';
 import {
-  create, deleteEnvironment, ensureNamespace, list, readEnvironments, remove, resourceUrl,
+  create, deleteEnvironment, ensureNamespace, list, readEnvironments, rebuildUi, remove, resourceUrl,
   setEnvironmentRunning,
 } from './api';
 import { buildStateOf } from './status';
@@ -46,6 +46,13 @@ export function specFromCr(cr: EnvironmentCR): RemudaSpec {
 
 /** The controller's build vocabulary in the UI's terms. */
 export function crBuildState(cr: EnvironmentCR): BuildState {
+  // Asked for and not yet picked up. Until the controller's next pass the newest
+  // Job is still the build being replaced, and its Ready would tell someone who
+  // just clicked Rebuild that nothing happened.
+  if (rebuildPending(cr)) {
+    return 'building';
+  }
+
   switch (cr.status?.build) {
   case 'Ready': return 'ready';
   case 'Failed': return 'failed';
@@ -231,6 +238,19 @@ export function environmentCrBody(spec: Partial<RemudaSpec> & {
 }
 
 /**
+ * Where a CR is read and written, which is always the host cluster.
+ *
+ * Never the `clusterId` the operations below are handed. Every caller passes the
+ * cluster the environment *runs* on, which is right for a legacy record and for
+ * every workload object -- but a CR stays on the host whatever it targets, so
+ * addressing it through the target asks a cluster with no Environment CRD at all.
+ * See createEnvironmentCr().
+ */
+const crUrl = (record: EnvironmentRecord): string => resourceUrl(
+  HOST_CLUSTER_ID, ENDPOINTS.environment, record.spec.namespace, record.spec.name
+);
+
+/**
  * Start or stop an environment, whichever record backs it.
  *
  * For a CR this is one field on the spec and the controller does the scaling,
@@ -248,7 +268,7 @@ export async function setRecordRunning(
     return setEnvironmentRunning(store, clusterId, record.spec, running);
   }
 
-  const url = resourceUrl(clusterId, ENDPOINTS.environment, record.spec.namespace, record.spec.name);
+  const url = crUrl(record);
   const existing = await store.dispatch('management/request', { url });
 
   if (existing?.spec?.running === running) {
@@ -279,18 +299,50 @@ export async function deleteRecord(
     return deleteEnvironment(store, clusterId, record.spec);
   }
 
-  await remove(store, clusterId, ENDPOINTS.environment, record.spec.namespace, record.spec.name);
+  // The host, not clusterId -- see crUrl().
+  await remove(store, HOST_CLUSTER_ID, ENDPOINTS.environment, record.spec.namespace, record.spec.name);
 }
 
 /**
- * Ask for a fresh UI build.
+ * Ask for a fresh UI build of the branch's current head, whichever record backs
+ * it.
  *
- * The CR path has no equivalent yet -- the controller starts the first build
- * and never another, with status.buildId as the hook -- so this reports that
- * rather than pretending. See the rebuild-trigger item in controller/README.md.
+ * For a CR this is a new spec.rebuildRequest, and the controller does the rest:
+ * a new build Job under a new name, with the superseded one retired. The value is
+ * only ever compared for change, so a timestamp serves -- new on every click, and
+ * it records when the last rebuild was asked for. For a legacy environment the
+ * browser still replaces the Job itself.
+ *
+ * Read-modify-write for the same reason as setRecordRunning().
  */
-export function canRebuild(record: EnvironmentRecord): boolean {
-  return record.source === 'legacy';
+export async function rebuildRecord(
+  store: any, clusterId: string, record: EnvironmentRecord, now: Date = new Date(),
+): Promise<void> {
+  if (record.source === 'legacy') {
+    return rebuildUi(store, clusterId, record.spec);
+  }
+
+  const url = crUrl(record);
+  const existing = await store.dispatch('management/request', { url });
+
+  await store.dispatch('management/request', {
+    url,
+    method: 'PUT',
+    data:   { ...existing, spec: { ...existing.spec, rebuildRequest: now.toISOString() } },
+  });
+}
+
+/**
+ * A rebuild that has been asked for and not yet started.
+ *
+ * Compared against what the controller last acted on rather than read off a
+ * flag, because the controller writes only status and could never reset one --
+ * see advanceBuild in controller/rebuild.go. Empty and absent count the same on
+ * both sides, so an environment written before the field existed is never
+ * pending.
+ */
+export function rebuildPending(cr: EnvironmentCR): boolean {
+  return (cr.spec?.rebuildRequest || '') !== (cr.status?.observedRebuildRequest || '');
 }
 
 /**

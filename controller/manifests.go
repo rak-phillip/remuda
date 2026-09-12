@@ -721,6 +721,12 @@ func (s *renderSpec) BuildScript() string {
 	}, "\n")
 }
 
+// buildJobName is the Job a build id renders to, which is also how a superseded
+// build is told apart from the current one.
+func (s *renderSpec) buildJobName(buildID string) string {
+	return fmt.Sprintf("%s-build-%s", s.Name, buildID)
+}
+
 func (s *renderSpec) buildJob(buildID string) *batchv1.Job {
 	env := []corev1.EnvVar{
 		{Name: "REPO", Value: s.Repo},
@@ -747,7 +753,7 @@ func (s *renderSpec) buildJob(buildID string) *batchv1.Job {
 	backoff := int32(1)
 
 	return &batchv1.Job{
-		ObjectMeta: s.meta(fmt.Sprintf("%s-build-%s", s.Name, buildID), RoleBuild),
+		ObjectMeta: s.meta(s.buildJobName(buildID), RoleBuild),
 		Spec: batchv1.JobSpec{
 			BackoffLimit: &backoff,
 			Template: corev1.PodTemplateSpec{

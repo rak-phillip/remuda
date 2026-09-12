@@ -8,7 +8,6 @@ import (
 	"log"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -115,9 +114,9 @@ func (c *controller) reconcileEnvironment(ctx context.Context, env *Environment)
 	// Named once and remembered, rather than derived from the clock each pass.
 	// The build Job's name is part of what desiredObjects() renders, and a name
 	// that moved every pass would mean a backend that upserts creating and
-	// deleting a Job forever.
-	if env.Status.BuildID == "" {
-		env.Status.BuildID = strconv.FormatInt(time.Now().Unix(), 10)
+	// deleting a Job forever. It moves only when a rebuild is asked for.
+	if advanceBuild(env, time.Now()) {
+		log.Printf("%s: rebuild requested, starting build %s", env.Name, env.Status.BuildID)
 	}
 
 	password, err := c.ensurePassword(ctx, spec)

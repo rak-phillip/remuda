@@ -9,16 +9,14 @@ import RcButton from '@components/RcButton/RcButton.vue';
 import { RcDropdown, RcDropdownItem, RcDropdownTrigger } from '@components/RcDropdown';
 import { useText } from '../utils/i18n';
 import ConfirmDelete from '../components/ConfirmDelete.vue';
-import {
-  hopAddresses, list, rebuildUi, resourceUrl, resyncHop
-} from '../utils/api';
+import { hopAddresses, list, resourceUrl, resyncHop } from '../utils/api';
 import { ingressEntry } from '../utils/discovery';
 import { hopHasDrifted } from '../utils/hop';
 import { isIncomplete, runStateOf } from '../utils/status';
 import {
-  canRebuild, crIncomplete, crRunState, deleteRecord, findEnvironment, setRecordRunning
+  crIncomplete, crRunState, deleteRecord, findEnvironment, rebuildPending, rebuildRecord, setRecordRunning
 } from '../utils/environments';
-import { environmentUrl, resourceBase, sharedDashboardIndexUrl } from '../utils/manifests';
+import { environmentUrl, resourceBase, servesTrustedCertificate, sharedDashboardIndexUrl } from '../utils/manifests';
 import {
   BLANK_CLUSTER, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME, PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
   BOOTSTRAP_USERNAME
@@ -38,8 +36,6 @@ const error = ref('');
 const spec = ref<RemudaSpec | null>(null);
 /** Kept alongside spec so the actions know which record they are acting on. */
 const record = ref<EnvironmentRecord | null>(null);
-/** Rebuild has no CR equivalent yet -- the controller builds once. */
-const rebuildable = computed(() => !!record.value && canRebuild(record.value));
 const password = ref('');
 const revealed = ref(false);
 const runState = ref<RunState>('pending');
@@ -62,12 +58,18 @@ const indexUrl = computed(() => (spec.value ? sharedDashboardIndexUrl(spec.value
 // like any other client. Without an issuer the ingress has no TLS block and
 // traefik answers with its own self-signed default, which that fetch rejects --
 // so the URL is still worth showing, but it will not work off this host as-is.
-const indexTrusted = computed(() => !!spec.value?.clusterIssuer);
+const indexTrusted = computed(() => !!spec.value && servesTrustedCertificate(spec.value));
 
 const latestJob = computed(() => [...jobs.value]
   .sort((a, b) => (b.metadata?.creationTimestamp || '').localeCompare(a.metadata?.creationTimestamp || ''))[0]);
 
 const buildState = computed(() => {
+  // Asked for and not yet picked up: until the controller's next pass the newest
+  // Job is still the build being replaced. See crBuildState().
+  if (record.value?.cr && rebuildPending(record.value.cr)) {
+    return 'building';
+  }
+
   const job = latestJob.value;
 
   if (!job) {
@@ -241,7 +243,7 @@ async function resync(cb: (ok: boolean) => void) {
 
 async function rebuild(cb: (ok: boolean) => void) {
   try {
-    await rebuildUi(store, clusterId, spec.value as RemudaSpec);
+    await rebuildRecord(store, clusterId, record.value as EnvironmentRecord);
     await load();
     cb(true);
   } catch (e: any) {
@@ -543,7 +545,6 @@ onUnmounted(() => clearInterval(timer));
         />
 
         <AsyncButton
-          v-if="rebuildable"
           mode="apply"
           :action-label="i18n.t('remuda.detail.rebuild')"
           :waiting-label="i18n.t('remuda.detail.rebuilding')"

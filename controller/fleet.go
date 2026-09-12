@@ -78,6 +78,10 @@ type backend interface {
 type directBackend struct{ c *controller }
 
 func (d *directBackend) Apply(ctx context.Context, spec *renderSpec, password, buildID string, running bool) error {
+	if err := d.c.sweepSupersededBuilds(ctx, spec, buildID); err != nil {
+		return err
+	}
+
 	if err := d.c.provision(ctx, spec, password, buildID, replicasFor(running)); err != nil {
 		return err
 	}

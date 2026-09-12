@@ -53,6 +53,18 @@ export const resourceBase = (spec: RemudaSpec): string => `${ browserOrigin(spec
  */
 export const sharedDashboardIndexUrl = (spec: RemudaSpec): string => `${ browserOrigin(spec) }/${ UI_BUNDLE_PATH }/index.html`;
 
+/**
+ * Whether the hostname is served with a certificate from a real issuer, rather
+ * than traefik's self-signed default.
+ *
+ * Asked of whichever ingress actually terminates TLS. A hop environment is
+ * fronted from the host cluster, so its issuer is the host's and lives on `hop`;
+ * the top-level `clusterIssuer` describes the target, which needs none. Reading
+ * only the top-level one called every downstream environment self-signed while
+ * it served a valid Let's Encrypt certificate.
+ */
+export const servesTrustedCertificate = (spec: RemudaSpec): boolean => !!(spec.hop ? spec.hop.clusterIssuer : spec.clusterIssuer);
+
 export const environmentUrl = (spec: RemudaSpec): string => browserOrigin(spec);
 
 const meta = (spec: RemudaSpec, name: string, role?: string) => ({
