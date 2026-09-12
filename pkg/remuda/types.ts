@@ -201,6 +201,8 @@ export interface EnvironmentStatus {
   build?: 'Unknown' | 'Building' | 'Ready' | 'Failed';
   run?: 'Pending' | 'Ready' | 'Stopped' | 'Stopping';
   buildId?: string;
+  /** The spec.rebuildRequest the current buildId answers. See rebuildPending(). */
+  observedRebuildRequest?: string;
   url?: string;
   sharedBundleUrl?: string;
   bootstrapSecret?: string;
@@ -218,7 +220,13 @@ export interface EnvironmentCR {
     labels?: Record<string, string>;
     [key: string]: any;
   };
-  spec: Partial<RemudaSpec> & { repo: string; branch: string; running?: boolean };
+  spec: Partial<RemudaSpec> & {
+    repo: string;
+    branch: string;
+    running?: boolean;
+    /** Opaque token; a changed value asks the controller for a fresh build. */
+    rebuildRequest?: string;
+  };
   status?: EnvironmentStatus;
 }
 

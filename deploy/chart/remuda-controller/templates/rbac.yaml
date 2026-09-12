@@ -121,10 +121,12 @@ rules:
   - apiGroups: ["remuda.rancher.io"]
     resources: ["environments/status"]
     verbs: ["get", "update", "patch"]
-  # What an environment is made of. No `delete` anywhere: every object carries an
+  # What an environment is made of. `delete` only on Jobs: every object carries an
   # owner reference back to its Environment, so removing that collects the lot --
   # build pods included, which a hand-rolled sweep has to chase separately
-  # because a DELETE on a Job defaults to Orphan propagation.
+  # because a DELETE on a Job defaults to Orphan propagation. A rebuild is the one
+  # thing that retires an object while its Environment lives on, so the
+  # superseded build Job is deleted by hand, with Background propagation.
   #
   # `update` only on Deployments, because replicas is the one field the
   # controller owns after creation. Everything else is created and then left
@@ -138,7 +140,7 @@ rules:
     verbs: ["get", "list", "watch", "create", "update"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "list", "watch", "create"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create"]

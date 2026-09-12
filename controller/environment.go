@@ -48,10 +48,15 @@ type EnvironmentSpec struct {
 	Repo   string `json:"repo"`
 	Branch string `json:"branch"`
 
-	// Start/stop, and the only field that is expected to be edited over an
+	// Start/stop, and one of the two fields expected to be edited over an
 	// environment's life. The schema defaults it to true, and CRD defaulting is
 	// applied on read as well as on write, so this is never meaningfully unset.
 	Running bool `json:"running"`
+
+	// RebuildRequest asks for a fresh UI build whenever it changes. An opaque
+	// token rather than a flag, because the controller writes only status and so
+	// could never reset a flag it had acted on -- see advanceBuild.
+	RebuildRequest string `json:"rebuildRequest,omitempty"`
 
 	ClusterID string `json:"clusterId,omitempty"`
 	Owner     string `json:"owner,omitempty"`
@@ -100,8 +105,12 @@ type EnvironmentStatus struct {
 
 	// BuildID names the environment's build Job. Recorded rather than derived
 	// from the clock, so what desiredObjects() renders is stable across passes --
-	// see reconcileEnvironment. Changing it is what a rebuild would mean.
+	// see reconcileEnvironment. It changes only on a rebuild.
 	BuildID string `json:"buildId,omitempty"`
+
+	// ObservedRebuildRequest is the spec.rebuildRequest that BuildID answers.
+	// Differing from spec is what a rebuild request looks like; see advanceBuild.
+	ObservedRebuildRequest string `json:"observedRebuildRequest,omitempty"`
 
 	// Named rather than inlined: the bootstrap password must not be readable to
 	// everyone who can list Environments.

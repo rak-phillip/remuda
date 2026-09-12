@@ -92,6 +92,15 @@ spec:
                     zero and leaves everything else -- volumes, hostname,
                     bootstrap password -- in place, so the URL answers 503 until
                     it is true again.
+                rebuildRequest:
+                  type: string
+                  description: >-
+                    Set to any value it has not held before to ask for a fresh UI
+                    build from the branch's current head. Compared for change
+                    only, so a timestamp is the natural choice. The value the
+                    current build answers is recorded in
+                    status.observedRebuildRequest, and setting this at create
+                    time does not build twice.
                 clusterId:
                   type: string
                   default: local
@@ -239,6 +248,12 @@ spec:
                     Names the current build Job. Set on the first provision and
                     changed only by a rebuild, so the rendered Job is stable
                     across reconciles rather than moving with the clock.
+                observedRebuildRequest:
+                  type: string
+                  description: >-
+                    The spec.rebuildRequest the current buildId answers. A spec
+                    value that differs from this is a rebuild that has been asked
+                    for and not yet started.
                 build:
                   type: string
                   enum:

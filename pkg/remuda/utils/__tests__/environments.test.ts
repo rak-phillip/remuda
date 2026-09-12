@@ -1,6 +1,6 @@
 import {
   crBuildState, crRunState, deleteRecord, environmentCrBody, fillDownstreamBuildState, listEnvironments,
-  setRecordRunning, specFromCr
+  rebuildPending, rebuildRecord, setRecordRunning, specFromCr
 } from '../environments';
 import { ENDPOINTS, ENVIRONMENT_API_VERSION, ENVIRONMENT_KIND, REMUDA_NS } from '../constants';
 import type { EnvironmentCR, EnvironmentRecord, RemudaSpec } from '../../types';
@@ -115,10 +115,33 @@ describe('state mapping', () => {
   });
 });
 
+describe('rebuildPending', () => {
+  const TOKEN = '2026-09-12T15:00:00.000Z';
+  const asked = (status: any = cr().status) => cr({ spec: { ...cr().spec, rebuildRequest: TOKEN }, status });
+
+  it('is pending from the write until the controller records the token', () => {
+    expect(rebuildPending(asked())).toBe(true);
+    expect(rebuildPending(asked({ ...cr().status, observedRebuildRequest: TOKEN }))).toBe(false);
+  });
+
+  it('is not pending for an environment nobody has asked to rebuild', () => {
+    // Every environment written before the field existed has neither side set.
+    expect(rebuildPending(cr())).toBe(false);
+  });
+
+  // Until the controller's next pass the newest Job is still the build being
+  // replaced, and its Ready would say the click did nothing.
+  it('reads as building rather than the previous build\'s state', () => {
+    expect(crBuildState(asked({ build: 'Ready' }))).toBe('building');
+    expect(crBuildState(asked({ build: 'Ready', observedRebuildRequest: TOKEN }))).toBe('ready');
+  });
+});
+
 describe('CR operations', () => {
   // The page hands these the cluster the environment runs on, which for
   // prak-test1 is a downstream cluster with no Environment CRD.
   const TARGET = 'c-m-9jprk9c6';
+  const TOKEN_TIME = '2026-09-12T15:00:00.000Z';
 
   const existing = () => ({
     ...cr(),
@@ -145,9 +168,23 @@ describe('CR operations', () => {
     };
   }
 
+  it('writes a fresh rebuild token onto the CR, keeping everything else', async() => {
+    const store = crStore(existing());
+
+    await rebuildRecord(store, TARGET, recordOf(existing()), new Date(TOKEN_TIME));
+
+    const put = store.calls.find((c) => c.method === 'PUT');
+
+    expect(put.data.spec.rebuildRequest).toBe(TOKEN_TIME);
+    expect(put.data.spec.running).toBe(true);
+    // Steve rejects an update carrying no resourceVersion.
+    expect(put.data.metadata.resourceVersion).toBe('4242');
+  });
+
   it('addresses the CR on the host cluster, whichever cluster it targets', async() => {
     const store = crStore(existing());
 
+    await rebuildRecord(store, TARGET, recordOf(existing()));
     await setRecordRunning(store, TARGET, recordOf(existing()), false);
     await deleteRecord(store, TARGET, recordOf(existing()));
 
