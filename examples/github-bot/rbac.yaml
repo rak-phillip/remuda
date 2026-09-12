@@ -1,0 +1,43 @@
+# What the bot needs when it runs inside the host cluster: Environments in
+# rancher-remuda, and nothing else. No Rancher token, no access to the objects
+# an environment is made of -- the controller creates those, and deleting the
+# Environment collects them.
+#
+# The bot runs in its own namespace so the RoleBinding is the only thing joining
+# the two, and removing it cuts the bot off without touching an environment.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: remuda-github-bot
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: remuda-github-bot
+  namespace: remuda-github-bot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: remuda-github-bot
+  namespace: rancher-remuda
+rules:
+  # `patch` for rebuilds, which are a merge patch of spec.rebuildRequest.
+  # No `update` and no status: the bot asks, and the controller reports.
+  - apiGroups: ["remuda.rancher.io"]
+    resources: ["environments"]
+    verbs: ["get", "list", "create", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: remuda-github-bot
+  namespace: rancher-remuda
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: remuda-github-bot
+subjects:
+  - kind: ServiceAccount
+    name: remuda-github-bot
+    namespace: remuda-github-bot
