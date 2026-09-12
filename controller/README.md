@@ -112,6 +112,13 @@ list in `hostdefaults.go` and `NESTED_CIDR_CANDIDATES` in `discovery.ts` have to
 Whichever of the two resolves an environment must reach the same answer, or the same spec produces a
 different nested k3s depending on who created it.
 
+The nested k3s also runs with `disable-network-policy`, and an environment cannot restart without it.
+Its node keeps one name for life but takes the pod's IP, which changes on every start, while the
+Node object in the etcd on the data volume still lists the previous one. kube-router's network policy
+controller looks for an interface carrying that stale IP, finds none, and k3s shuts down — every
+start after the first, with Rancher reporting only `[FATAL] ... unexpected EOF`. It is the one k3s
+setting the controller keeps current on environments that already exist; see `syncK3sConfig`.
+
 ### Downstream clusters go through Fleet
 
 An environment on any other cluster is delivered as a `fleet.cattle.io` Bundle targeting it, and the
