@@ -9,7 +9,7 @@
     "development",
     "preview"
   ],
-  "version": "0.2.0-rc.13",
+  "version": "0.2.0",
   "private": false,
   "rancher": {
     "annotations": {
