@@ -28,7 +28,7 @@ export function init($plugin: IPlugin, store: any) {
   basicType(['environments']);
 
   virtualType({
-    label:      store.getters['i18n/t']('remuda.nav.environments'),
+    labelKey:   'remuda.nav.environments',
     name:       'environments',
     namespaced: false,
     weight:     20,
