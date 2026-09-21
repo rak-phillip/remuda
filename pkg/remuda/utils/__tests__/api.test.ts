@@ -1,8 +1,10 @@
 import {
-  collectionUrl, deleteEnvironment, hostnameTaken, rebuildUi, resourceUrl, resyncHop,
-  setEnvironmentRunning,
+  collectionUrl, deleteEnvironment, hostnameTaken, list, readyClusters, rebuildUi, remove,
+  resourceUrl, resyncHop, setEnvironmentRunning,
 } from '../api';
-import { CONFIG_MAP_NAME, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME } from '../constants';
+import {
+  CLUSTER_READ_TIMEOUT_MS, CONFIG_MAP_NAME, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME,
+} from '../constants';
 import type { IngressEntry, RemudaSpec } from '../../types';
 
 describe('collectionUrl', () => {
@@ -445,5 +447,73 @@ describe('rebuildUi', () => {
     await rebuildUi(store, 'local', spec);
 
     expect(deletes).toHaveLength(0);
+  });
+});
+
+describe('readyClusters', () => {
+  const storeReturning = (clusters: any[]) => ({ dispatch: jest.fn(async() => clusters) });
+
+  const ids = async(clusters: any[]) => (await readyClusters(storeReturning(clusters))).map((c) => c.id);
+
+  // eva-imp on the shared instance, measured 2026-09-21: Connected=True with
+  // Ready=False and "dial tcp 10.43.0.1:443: connect: connection refused". Its
+  // agent was up, so Rancher accepted every proxied read and none of them ever
+  // came back -- still open at ninety seconds, against under half a second for
+  // a healthy cluster. `isReady` resolves from Connected, so this is precisely
+  // the cluster the old filter let through, and one of them stalled the list.
+  it('skips a connected cluster whose own API server is down', async() => {
+    expect(await ids([
+      {
+        id: 'local', isReady: true, hasError: false
+      },
+      {
+        id: 'c-6w7sq', isReady: true, hasError: true
+      },
+    ])).toEqual(['local']);
+  });
+
+  it('still skips a cluster that reports itself not ready', async() => {
+    expect(await ids([
+      { id: 'local', isReady: true },
+      { id: 'c-fsf7z', isReady: false },
+    ])).toEqual(['local']);
+  });
+
+  // A cluster that answers neither question is an older or hand-built model,
+  // and dropping it would hide working environments to avoid a hypothetical
+  // hang the timeout already covers.
+  it('keeps a cluster that reports neither', async() => {
+    expect(await ids([{ id: 'c-m-abc123' }])).toEqual(['c-m-abc123']);
+  });
+});
+
+describe('cross-cluster reads', () => {
+  const spyStore = () => ({ dispatch: jest.fn(async() => ({ data: [] })) });
+
+  const payloadOf = (store: any) => store.dispatch.mock.calls[0][1];
+
+  // The whole point of the fix: `loadCluster(...).catch(() => [])` in the list
+  // page cannot help against a cluster that never answers, because nothing
+  // rejects. The timeout is what turns a hang into a rejection it can catch.
+  it('abandons a read the cluster never answers', async() => {
+    const store = spyStore();
+
+    await list(store, 'c-6w7sq', ENDPOINTS.configmap);
+
+    expect(payloadOf(store).timeout).toBe(CLUSTER_READ_TIMEOUT_MS);
+  });
+
+  it('gives up before the list page polls again', () => {
+    expect(CLUSTER_READ_TIMEOUT_MS).toBeLessThan(15000);
+  });
+
+  // Deliberate: an abandoned write may well have landed, and calling it failed
+  // is a lie the user acts on.
+  it('leaves a write without one', async() => {
+    const store = spyStore();
+
+    await remove(store, 'local', ENDPOINTS.job, 'rancher-remuda', 'multi-idp-build-1');
+
+    expect(payloadOf(store).timeout).toBeUndefined();
   });
 });

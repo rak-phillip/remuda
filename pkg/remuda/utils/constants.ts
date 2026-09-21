@@ -183,6 +183,25 @@ export const LOCAL_PATH = {
 } as const;
 
 /**
+ * How long a read through a cluster's proxy may take before it is abandoned.
+ *
+ * Not tidiness -- this is the only thing standing between one sick cluster and
+ * a dead page. A cluster whose agent is *connected* while its API server is
+ * down accepts the proxied request and then never answers it: measured on
+ * `eva-imp`, where `/v1/configmaps` was still open at 90 seconds while every
+ * healthy cluster answered in under 0.4 and every disconnected one failed in
+ * 14.2. Nothing below this layer has a timeout of its own, so without one the
+ * request never settles, and a caller awaiting several clusters at once waits
+ * forever on the slowest -- which is what a per-cluster `.catch()` cannot help
+ * with, because nothing ever rejects.
+ *
+ * Ten seconds is comfortably longer than any healthy read measured and shorter
+ * than the list page's fifteen-second poll, so a cluster that has stopped
+ * answering costs one skipped refresh rather than overlapping loads.
+ */
+export const CLUSTER_READ_TIMEOUT_MS = 10000;
+
+/**
  * How long after an environment is recorded its backend Deployment may be
  * missing before the environment is called incomplete. Generous on purpose: the
  * create writes twelve objects in sequence, and a slow cluster should not make a

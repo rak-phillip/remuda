@@ -3,8 +3,8 @@ import {
   REMUDA_NS,
 } from './constants';
 import {
-  create, deleteEnvironment, ensureNamespace, list, readEnvironments, rebuildUi, remove, resourceUrl,
-  setEnvironmentRunning,
+  create, deleteEnvironment, ensureNamespace, list, read, readEnvironments, rebuildUi, remove,
+  resourceUrl, setEnvironmentRunning,
 } from './api';
 import { buildStateOf } from './status';
 import type {
@@ -176,7 +176,7 @@ export async function readEnvironmentCr(
   namespace = REMUDA_NS,
 ): Promise<EnvironmentCR | undefined> {
   try {
-    return await store.dispatch('management/request', { url: resourceUrl(clusterId, ENDPOINTS.environment, namespace, name) });
+    return await read(store, resourceUrl(clusterId, ENDPOINTS.environment, namespace, name));
   } catch {
     return undefined;
   }
@@ -269,7 +269,7 @@ export async function setRecordRunning(
   }
 
   const url = crUrl(record);
-  const existing = await store.dispatch('management/request', { url });
+  const existing = await read(store, url);
 
   if (existing?.spec?.running === running) {
     return;
@@ -331,7 +331,7 @@ export async function rebuildRecord(
   }
 
   const url = crUrl(record);
-  const existing = await store.dispatch('management/request', { url });
+  const existing = await read(store, url);
   const token = now.toISOString();
 
   const saved = await store.dispatch('management/request', {
