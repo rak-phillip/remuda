@@ -1,5 +1,5 @@
 import {
-  CONFIG_MAP_NAME, REMUDA_NS, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME,
+  CLUSTER_READ_TIMEOUT_MS, CONFIG_MAP_NAME, REMUDA_NS, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME,
 } from './constants';
 import { buildJobManifest, namespaceManifest } from './manifests';
 import { localPathManifests } from './storage';
@@ -22,8 +22,26 @@ export const resourceUrl = (clusterId: string, endpoint: string, namespace: stri
 /** A cluster-scoped resource, which has no namespace segment at all. */
 export const clusterResourceUrl = (clusterId: string, endpoint: string, name: string): string => `${ base(clusterId) }/${ endpoint }/${ name }`;
 
+/**
+ * Every read this module makes, and the only place a timeout is set.
+ *
+ * Reads go through it and writes deliberately do not. A read that is abandoned
+ * costs nothing -- the list page re-runs it fifteen seconds later, and every
+ * caller here already treats a failed read as an absent answer. A write that is
+ * abandoned is a different thing entirely: the request may well have landed,
+ * and reporting it as failed would be a lie the user acts on. Steve answers a
+ * write from the host's own API server anyway, which is the path that does not
+ * hang.
+ *
+ * See CLUSTER_READ_TIMEOUT_MS for what hanging actually looks like, and why a
+ * `.catch()` around a cross-cluster read is not enough on its own.
+ */
+export function read(store: any, url: string, timeout = CLUSTER_READ_TIMEOUT_MS): Promise<any> {
+  return store.dispatch('management/request', { url, timeout });
+}
+
 export function list(store: any, clusterId: string, endpoint: string, namespace = REMUDA_NS): Promise<any> {
-  return store.dispatch('management/request', { url: collectionUrl(clusterId, endpoint, namespace) });
+  return read(store, collectionUrl(clusterId, endpoint, namespace));
 }
 
 export function create(store: any, clusterId: string, { endpoint, body }: ManifestRequest): Promise<any> {
@@ -51,18 +69,33 @@ export function remove(
 
 export async function ensureNamespace(store: any, clusterId: string, namespace = REMUDA_NS): Promise<void> {
   try {
-    await store.dispatch('management/request', { url: `${ base(clusterId) }/${ ENDPOINTS.namespace }/${ namespace }` });
+    await read(store, `${ base(clusterId) }/${ ENDPOINTS.namespace }/${ namespace }`);
   } catch {
     await create(store, clusterId, namespaceManifest(namespace));
   }
 }
 
-/** Clusters the extension can deploy into, newest Rancher state first. */
+/**
+ * Clusters the extension can deploy into, newest Rancher state first.
+ *
+ * `hasError` is checked alongside `isReady` because on its own `isReady` lets
+ * through exactly the cluster that hurts most. The shell resolves it from the
+ * **Connected** condition when there is one, falling back to Ready only for
+ * older servers -- so a cluster whose agent is connected while its API server
+ * is refusing connections reports `isReady === true` and is asked for its
+ * environments like any healthy one. It then never answers. `hasError` is the
+ * same pairing the shell's own `canExplore` uses, which is why Rancher greys
+ * out Explore for that cluster while this list walked straight into it.
+ *
+ * Still `!== false` and `!hasError` rather than a positive test: a model that
+ * reports neither is an older or hand-built one, and excluding a cluster on a
+ * property it does not have would be a worse failure than probing it.
+ */
 export async function readyClusters(store: any): Promise<{ id: string; name: string; isLocal: boolean }[]> {
   const clusters = await store.dispatch('management/findAll', { type: 'management.cattle.io.cluster' });
 
   return (clusters || [])
-    .filter((c: any) => c.isReady !== false)
+    .filter((c: any) => c.isReady !== false && !c.hasError)
     .map((c: any) => ({
       id:      c.id,
       name:    c.nameDisplay || c.spec?.displayName || c.id,
@@ -116,7 +149,7 @@ export async function resyncHop(store: any, spec: RemudaSpec, entry: IngressEntr
   let existing: any;
 
   try {
-    existing = await store.dispatch('management/request', { url });
+    existing = await read(store, url);
   } catch {
     existing = undefined;
   }
@@ -152,7 +185,7 @@ export async function hopAddresses(store: any, spec: RemudaSpec): Promise<string
   }
 
   try {
-    const slice = await store.dispatch('management/request', { url: resourceUrl(HOST_CLUSTER_ID, ENDPOINTS.endpointslice, spec.namespace, hopName(spec)) });
+    const slice = await read(store, resourceUrl(HOST_CLUSTER_ID, ENDPOINTS.endpointslice, spec.namespace, hopName(spec)));
 
     return (slice?.endpoints || []).flatMap((e: any) => e.addresses || []);
   } catch {
@@ -264,7 +297,7 @@ async function scaleDeployment(
   let existing: any;
 
   try {
-    existing = await store.dispatch('management/request', { url });
+    existing = await read(store, url);
   } catch {
     return;
   }
