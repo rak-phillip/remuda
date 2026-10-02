@@ -369,9 +369,12 @@ export function buildJobManifest(spec: RemudaSpec, buildId: string): ManifestReq
               // it: ~4.3Gi at 2 CPU, ~5.3Gi at 4, ~6.0Gi at 8, and ~7.4Gi
               // uncapped on a 24-core node. Raising limits.cpu raises the
               // memory floor with it; dropping the limit entirely lets the
-              // build fan out to the node's core count and OOM.
+              // build fan out to the node's core count and OOM. requests.cpu
+              // is only what the scheduler reserves, so it stays small: a
+              // 2-core node already gives 1 CPU to the Rancher backend, and a
+              // 1 CPU request here left builds pending there.
               resources: {
-                requests: { cpu: '1', memory: '4Gi' },
+                requests: { cpu: '500m', memory: '4Gi' },
                 limits:   { cpu: '4', memory: '7Gi' },
               },
             }],
