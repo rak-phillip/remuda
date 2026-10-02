@@ -56,7 +56,7 @@ jobs:
           node-version-file: '.nvmrc'
 
       # Pinned so a new Claude Code release cannot turn a passing commit red
-      # overnight; bump it deliberately. Needs no credentials. Not --strict:
-      # plugin.json carries no version yet, which is a warning.
+      # overnight; bump it deliberately. Needs no credentials. --strict makes
+      # warnings fail too -- a missing version is one.
       - name: claude plugin validate
-        run: npx -y @anthropic-ai/claude-code@2.1.287 plugin validate .
+        run: npx -y @anthropic-ai/claude-code@2.1.287 plugin validate . --strict

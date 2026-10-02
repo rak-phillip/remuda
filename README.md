@@ -485,15 +485,16 @@ git push && git push --tags
 - **`preversion`** — `yarn lint && yarn test && yarn build-pkg remuda`. A version that does not build
   never gets tagged. `v0.1.0` published an empty bundle because nothing checked this.
 - **`version`** — `scripts/bump-version --sync --stage`, which copies the new version into
-  `pkg/remuda/package.json` and the controller's `Chart.yaml`, and stages exactly those files.
+  `pkg/remuda/package.json`, the skill's `.claude-plugin/plugin.json` and the controller's
+  `Chart.yaml`, and stages exactly those files.
 
 Yarn then commits all of it as `v0.2.0` and tags it, which is the tag `release.yml` triggers on.
 
 > Use `--new-version`. A bare `yarn version 0.2.0` ignores the argument and prompts instead.
 
-`scripts/bump-version` rewrites the version in the three files that carry it — the root
-`package.json`, `pkg/remuda/package.json`, and the controller's `Chart.yaml` (`version` and
-`appVersion`). **Use it rather than editing those by hand**; missing one is the easiest way to fail a
+`scripts/bump-version` rewrites the version in the four files that carry it — the root
+`package.json`, `pkg/remuda/package.json`, `.claude-plugin/plugin.json`, and the controller's
+`Chart.yaml` (`version` and `appVersion`). **Use it rather than editing those by hand**; missing one is the easiest way to fail a
 release.
 
 The same script enforces this, so CI and the bump can never disagree about which files carry a

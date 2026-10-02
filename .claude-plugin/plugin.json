@@ -1,11 +1,16 @@
 {
   "name": "remuda",
   "displayName": "Remuda",
+  "version": "0.2.1",
   "description": "Create, inspect and tear down Remuda dev environments -- a running Rancher serving a dashboard branch -- from a git checkout. Needs Node 20 or newer.",
   "author": {
     "name": "Phillip Rak"
   },
   "homepage": "https://github.com/rak-phillip/remuda",
   "repository": "https://github.com/rak-phillip/remuda",
-  "keywords": ["rancher", "dashboard", "preview-environments"]
+  "keywords": [
+    "rancher",
+    "dashboard",
+    "preview-environments"
+  ]
 }

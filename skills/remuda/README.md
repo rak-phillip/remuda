@@ -18,7 +18,8 @@ runs.
 /plugin install remuda@remuda
 ```
 
-The plugin follows `main`; `/plugin marketplace update remuda` picks up new commits.
+The plugin is versioned with Remuda's releases, so it stays in step with the released controller;
+`/plugin marketplace update remuda` picks up a new release.
 
 **Codex, pi and other agents** — clone the repository and link the directory into the agent's skills
 directory. A symlink rather than a copy, so the skill moves with the repository:
