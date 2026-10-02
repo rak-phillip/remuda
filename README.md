@@ -10,6 +10,9 @@ Give it a repo and a branch — including a personal fork such as
 target cluster, deploys a Rancher backend configured to serve that bundle, and hands back one HTTPS
 URL and a bootstrap password.
 
+The same environments can be driven from a coding agent — Claude Code, Codex or pi — with the
+[Remuda skill](skills/remuda/README.md); see [From a coding agent](#from-a-coding-agent).
+
 ## Why a build, rather than a published bundle
 
 `rancher/dashboard`'s `build-and-upload-branch.yaml` is gated on
@@ -451,6 +454,23 @@ The extension bundle is fetched at runtime from `raw.githubusercontent.com`, so 
 `ui-plugin-server` needs egress to GitHub. Where it does not have it, use the Extension Catalog Image
 at `ghcr.io/rak-phillip/ui-extension-remuda` via **Extensions → Manage Extension Catalogs** instead.
 
+## From a coding agent
+
+[`skills/remuda`](skills/remuda/README.md) is a skill that lets an agent create, follow, rebuild,
+stop and delete environments from a dashboard checkout, through the same Environment API the
+extension uses. In Claude Code, this repository is its own plugin marketplace:
+
+```
+/plugin marketplace add rak-phillip/remuda
+/plugin install remuda@remuda
+```
+
+Codex, pi and other agents that read [Agent Skills](https://agentskills.io) take the directory
+itself; the skill's README covers installing it there, the token it needs, and its configuration.
+
+The skill needs the controller to be installed already. On a new Rancher, create one environment from
+the extension first.
+
 ## Releasing
 
 One command ships everything:
@@ -465,15 +485,16 @@ git push && git push --tags
 - **`preversion`** — `yarn lint && yarn test && yarn build-pkg remuda`. A version that does not build
   never gets tagged. `v0.1.0` published an empty bundle because nothing checked this.
 - **`version`** — `scripts/bump-version --sync --stage`, which copies the new version into
-  `pkg/remuda/package.json` and the controller's `Chart.yaml`, and stages exactly those files.
+  `pkg/remuda/package.json`, the skill's `.claude-plugin/plugin.json` and the controller's
+  `Chart.yaml`, and stages exactly those files.
 
 Yarn then commits all of it as `v0.2.0` and tags it, which is the tag `release.yml` triggers on.
 
 > Use `--new-version`. A bare `yarn version 0.2.0` ignores the argument and prompts instead.
 
-`scripts/bump-version` rewrites the version in the three files that carry it — the root
-`package.json`, `pkg/remuda/package.json`, and the controller's `Chart.yaml` (`version` and
-`appVersion`). **Use it rather than editing those by hand**; missing one is the easiest way to fail a
+`scripts/bump-version` rewrites the version in the four files that carry it — the root
+`package.json`, `pkg/remuda/package.json`, `.claude-plugin/plugin.json`, and the controller's
+`Chart.yaml` (`version` and `appVersion`). **Use it rather than editing those by hand**; missing one is the easiest way to fail a
 release.
 
 The same script enforces this, so CI and the bump can never disagree about which files carry a

@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Set, or check, the release version across every file that carries it.
 
-Four values in three files have to agree or a release fails its version gate:
+Five values in four files have to agree or a release fails its version gate:
 
   package.json                              the catalog image version
   pkg/remuda/package.json                   the extension chart's version
+  .claude-plugin/plugin.json                the agent skill's plugin version
   deploy/chart/remuda-controller/Chart.yaml version and appVersion
+
+The plugin carries one so installs move with releases rather than with every
+commit to main: the skill writes the Environment CRD, and running ahead of the
+released controller is the same skew upgradeControllerIfBehind exists to stop.
 
     scripts/bump-version 0.2.0            set them all
     scripts/bump-version --check          verify they agree with each other
@@ -38,7 +43,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CHART = ROOT / 'deploy/chart/remuda-controller/Chart.yaml'
-PACKAGES = [ROOT / 'package.json', ROOT / 'pkg/remuda/package.json']
+PACKAGES = [ROOT / 'package.json', ROOT / 'pkg/remuda/package.json', ROOT / '.claude-plugin/plugin.json']
 
 SEMVER = re.compile(r'^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')
 

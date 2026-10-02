@@ -1,0 +1,14 @@
+{
+  "name": "remuda",
+  "description": "Remuda dev environments for Rancher dashboard branches",
+  "owner": {
+    "name": "Phillip Rak"
+  },
+  "plugins": [
+    {
+      "name": "remuda",
+      "source": "./",
+      "description": "Create, inspect and tear down Remuda dev environments from a dashboard checkout"
+    }
+  ]
+}

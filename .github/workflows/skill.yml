@@ -1,0 +1,62 @@
+name: Skill
+
+# The agent skill in skills/remuda and the plugin manifests that publish it.
+# Its own workflow because ci.yml ignores **.md, and SKILL.md is the skill.
+on:
+  # release-candidate as well as main -- see the note in ci.yml.
+  push:
+    branches: [main, release-candidate]
+    paths: ['skills/**', '.claude-plugin/**', '.github/workflows/skill.yml']
+  pull_request:
+    paths: ['skills/**', '.claude-plugin/**', '.github/workflows/skill.yml']
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./
+
+jobs:
+  test:
+    name: Test on Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the oldest the README promises; .nvmrc is what the repo builds
+        # with. The skill has no dependencies, so nothing is installed.
+        node: ['20', '24']
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Files rather than the directory: given a directory, `node --test` tries
+      # to load it as a module and reports one failure instead of running any.
+      - run: node --test skills/remuda/*.test.mjs
+
+      # Each entry point parses: a syntax error in a file no test imports would
+      # otherwise reach users first.
+      - run: for f in skills/remuda/*.mjs; do node --check "$f"; done
+
+  validate:
+    name: Validate plugin manifests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      # Pinned so a new Claude Code release cannot turn a passing commit red
+      # overnight; bump it deliberately. Needs no credentials. --strict makes
+      # warnings fail too -- a missing version is one.
+      - name: claude plugin validate
+        run: npx -y @anthropic-ai/claude-code@2.1.287 plugin validate . --strict
