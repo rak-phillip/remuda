@@ -516,12 +516,20 @@ What a tag produces:
 
 | Job | Artifact | Lands in |
 |---|---|---|
-| `charts` | Extension chart + plugin bundle | `gh-pages` → the Helm repo above |
-| `catalog` | Extension Catalog Image | `ghcr.io/rak-phillip/ui-extension-remuda` |
 | `controller-image` | Controller image | `ghcr.io/rak-phillip/remuda-controller` |
-| `controller-chart` | Controller chart | `gh-pages`, merged into the same index |
+| `charts` | Extension chart + plugin bundle, and the controller chart | `gh-pages` → the Helm repo above, in one commit |
+| `catalog` | Extension Catalog Image | `ghcr.io/rak-phillip/ui-extension-remuda` |
 
-`controller-chart` runs strictly after the extension chart, because both push to the same branch.
+`charts` waits for `controller-image` and publishes both charts in **one commit**. The extension
+upgrades the controller to exactly its own version on the next dashboard load, and gives up if no
+repository lists that version. So an index must never offer an extension without its controller.
+Until 0.3.0 the two went out as separate pushes up to 16 minutes apart, and a Rancher that refreshed
+in between kept the old controller until someone refreshed the repository by hand.
+
+`charts` builds the extension with `publish-pkgs` but merges the index itself, from the branch as
+checked out. The upstream reusable workflow merges from a copy of `index.yaml` downloaded from
+`raw.githubusercontent.com`, which is cached for minutes and could drop an entry pushed just
+before.
 
 ### Release candidates
 
@@ -539,15 +547,11 @@ A candidate differs in exactly three places:
   production Index URL.
 - **It never moves the `latest` image tag.** The controller chart's `image.tag` defaults to
   `.Chart.AppVersion`, so an unpinned `helm install` must not be able to pull a candidate.
-- **`charts-rc` runs instead of `charts`.** The upstream reusable workflow ends in
-  `helm/chart-releaser-action`, whose `pages_branch` defaults to `gh-pages` and which
-  `build-extension-charts.yml` does not expose as an input — so it writes the index to production
-  whatever `target_branch` says. `0.2.0-rc.2` leaked into the production index this way and had to
-  be reverted by hand. `charts-rc` does the same work without it.
-
-Nothing else about chart-releaser is load-bearing: `publish-pkgs` alone produces a complete,
-correctly merged repository. Dropping it costs a candidate its GitHub Release and its
-`remuda-X.Y.Z` tag, both of which were noise.
+- **It skips `helm/chart-releaser-action`.** Its `pages_branch` defaults to `gh-pages`, so in the
+  upstream workflow it wrote a candidate's index to production whatever `target_branch` said.
+  `0.2.0-rc.2` leaked into the production index this way and had to be reverted by hand. For a
+  production release it only creates the `remuda-X.Y.Z` GitHub Release; a candidate goes without
+  one.
 
 Installing a candidate is the candidate channel in [Installing](#installing); nothing about it is
 special beyond the Index URL.

@@ -122,45 +122,46 @@ jobs:
 
           echo "$bundle is $(stat -c%s "$bundle") bytes"
 
-  # Publishes the Helm repository the Extensions screen installs from.
+  # Publishes the Helm repository the Extensions screen installs from: the
+  # extension chart and the controller chart, in one commit.
   #
-  # Production only. The last step of the upstream workflow is
-  # helm/chart-releaser-action, whose `pages_branch` defaults to `gh-pages` and
-  # which build-extension-charts.yml does not expose as an input -- so it writes
-  # the index to `gh-pages` whatever `target_branch` says. Correct for a
-  # production release; a leak for a candidate. v0.2.0-rc.2 landed in the
-  # production index this way and had to be reverted by hand. Candidates go
-  # through `charts-rc` instead.
+  # One commit because the extension's onLogin hook upgrades the controller to
+  # exactly the extension's version, and gives up if no repository lists it. Two
+  # pushes leave a window where Rancher can fetch an index offering the new
+  # extension without its controller. v0.3.0's was 16 minutes -- the controller
+  # image build -- and a Rancher that refreshed inside it kept the old
+  # controller until the repository was refreshed by hand. The same gap was in
+  # every release before it.
+  #
+  # Not the upstream build-extension-charts.yml, for two reasons:
+  # - Its index is merged from a copy of index.yaml downloaded from
+  #   raw.githubusercontent.com, which is cached for minutes. Publishing after
+  #   the controller could rewrite the index from a copy that predates it and
+  #   drop the controller entry. The index here is merged from the branch as
+  #   checked out.
+  # - Its chart-releaser step has a `pages_branch` that defaults to `gh-pages`
+  #   and is not exposed, so a candidate's index leaked into production
+  #   (v0.2.0-rc.2). Here that step runs for production releases only.
+  #
+  # After controller-image, so the index never offers a chart whose image does
+  # not exist yet.
   charts:
-    name: Extension chart
-    needs: [version, verify]
-    if: needs.version.outputs.prerelease == 'false'
-    uses: rancher/dashboard/.github/workflows/build-extension-charts.yml@master
-    permissions:
-      contents: write
-      pull-requests: write
-    with:
-      target_branch: ${{ needs.version.outputs.pages_branch }}
-      tagged_release: ${{ needs.version.outputs.tagged_release }}
-
-  charts-rc:
-    name: Extension chart (candidate)
-    needs: [version, verify]
-    if: needs.version.outputs.prerelease == 'true'
+    name: Helm repository
+    needs: [version, verify, controller-image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
-        with:
-          path: source
-
+      # The pages branch at the workspace root, as chart-releaser expects; the
+      # source beside it. Full history so the commit step can rebase.
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.pages_branch }}
-          path: pages
-          # Full history so the commit step can rebase before pushing.
           fetch-depth: 0
+
+      - uses: actions/checkout@v7
+        with:
+          path: source
 
       - run: corepack enable
 
@@ -170,8 +171,8 @@ jobs:
           cache-dependency-path: source/yarn.lock
           node-version-file: source/.nvmrc
 
-      # Pinned to what the upstream workflow uses, so a candidate's chart is
-      # packaged by the same helm that will package the production release.
+      # Pinned to what the upstream workflow uses, so the extension chart is
+      # packaged exactly as it was before this job replaced it.
       - uses: azure/setup-helm@v5
         with:
           version: v3.8.0
@@ -189,7 +190,7 @@ jobs:
             -b '${{ needs.version.outputs.pages_branch }}' \
             -t '${{ needs.version.outputs.tagged_release }}'
 
-      - name: Check the candidate actually built
+      - name: Check the extension actually built
         working-directory: ./source
         run: |
           set -euo pipefail
@@ -209,15 +210,46 @@ jobs:
             echo "$f is $(stat -c%s "$f") bytes"
           done
 
-      - name: Commit
+      - name: Add both charts and rebuild the index
         run: |
           set -euo pipefail
 
-          # `cp -r <dir>/. <dest>/` merges into the directories already on the
-          # branch rather than nesting inside them.
-          cp -r source/tmp/. pages/
+          # Everything publish-pkgs built except its index.yaml, which it merged
+          # from the possibly stale download described above. `<dir>/.` merges
+          # into the directories already on the branch rather than nesting.
+          for d in assets charts extensions; do
+            mkdir -p "$d"
+            cp -r "source/tmp/$d/." "$d/"
+          done
 
-          cd pages
+          helm package source/deploy/chart/remuda-controller -d assets/remuda-controller
+
+          # --url assets/ keeps entries relative, as the extension publish
+          # writes them; --merge keeps every entry already on the branch.
+          merge=()
+          [[ -f index.yaml ]] && merge=(--merge index.yaml)
+          helm repo index assets --url assets/ "${merge[@]}"
+          mv assets/index.yaml index.yaml
+
+      # The guarantee this job exists for, checked rather than assumed.
+      - name: Check the index lists both at this version
+        run: |
+          set -euo pipefail
+
+          version='${{ needs.version.outputs.version }}'
+
+          for chart in remuda remuda-controller; do
+            url="assets/${chart}/${chart}-${version}.tgz"
+            if ! grep -qF -- "- ${url}" index.yaml; then
+              echo "::error::index.yaml does not list ${url}"
+              exit 1
+            fi
+            echo "index.yaml lists ${url}"
+          done
+
+      - name: Commit
+        run: |
+          set -euo pipefail
 
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
@@ -228,9 +260,22 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Add ${{ needs.version.outputs.tagged_release }}"
+          git commit -m "Add remuda and remuda-controller ${{ needs.version.outputs.version }}"
           git pull --rebase origin "${{ needs.version.outputs.pages_branch }}"
           git push origin "${{ needs.version.outputs.pages_branch }}"
+
+      # The GitHub release (remuda-<version>, with the chart attached) the
+      # upstream workflow made. After the push, so the index it reads already
+      # lists this version and it has nothing to add. Never for a candidate:
+      # see the note above this job.
+      - name: Run chart-releaser
+        if: needs.version.outputs.prerelease == 'false'
+        uses: helm/chart-releaser-action@cae68fefc6b5f367a0275617c9f83181ba54714f # v1.7.0
+        with:
+          charts_dir: ./charts/*
+        env:
+          CR_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          CR_SKIP_EXISTING: true
 
   # The air-gapped install path: Extensions -> Manage Extension Catalogs.
   catalog:
@@ -288,69 +333,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  # Adds the controller chart to the same Helm repository as the extension, so
-  # one Index URL serves both. Strictly after whichever extension-chart job ran:
-  # both push to the same branch, and running them together would race.
-  controller-chart:
-    name: Controller chart
-    needs: [version, charts, charts-rc, controller-image]
-    # Exactly one of `charts` / `charts-rc` runs, so the default "skip if a
-    # dependency was skipped" would skip this job on every release. Run unless
-    # something actually went wrong.
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          path: source
-
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.version.outputs.pages_branch }}
-          path: pages
-          # Full history: the commit step rebases onto whatever the extension
-          # job just pushed, and `git pull --rebase` cannot work on a shallow
-          # clone.
-          fetch-depth: 0
-
-      - uses: azure/setup-helm@v5
-        with:
-          version: v3.14.0
-
-      - name: Package the chart and merge it into the index
-        working-directory: ./pages
-        run: |
-          set -euo pipefail
-
-          helm package ../source/deploy/chart/remuda-controller -d assets/remuda-controller
-
-          # --url assets/ keeps entries relative, matching what the extension
-          # publish writes; --merge preserves the extension's own entries.
-          merge=()
-          [[ -f index.yaml ]] && merge=(--merge index.yaml)
-          helm repo index assets --url assets/ "${merge[@]}"
-          mv assets/index.yaml index.yaml
-
-      - name: Commit
-        working-directory: ./pages
-        run: |
-          set -euo pipefail
-
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add assets index.yaml
-
-          if git diff --cached --quiet; then
-            echo "Nothing to publish; this version is already in the index."
-            exit 0
-          fi
-
-          git commit -m "Add remuda-controller ${{ needs.version.outputs.version }}"
-
-          # The extension job pushed to this branch moments ago, so rebase
-          # rather than assume the checkout is still current.
-          git pull --rebase origin "${{ needs.version.outputs.pages_branch }}"
-          git push origin "${{ needs.version.outputs.pages_branch }}"
