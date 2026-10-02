@@ -10,6 +10,9 @@ Give it a repo and a branch — including a personal fork such as
 target cluster, deploys a Rancher backend configured to serve that bundle, and hands back one HTTPS
 URL and a bootstrap password.
 
+The same environments can be driven from a coding agent — Claude Code, Codex or pi — with the
+[Remuda skill](skills/remuda/README.md); see [From a coding agent](#from-a-coding-agent).
+
 ## Why a build, rather than a published bundle
 
 `rancher/dashboard`'s `build-and-upload-branch.yaml` is gated on
@@ -450,6 +453,23 @@ record and no environment.
 The extension bundle is fetched at runtime from `raw.githubusercontent.com`, so the cluster running
 `ui-plugin-server` needs egress to GitHub. Where it does not have it, use the Extension Catalog Image
 at `ghcr.io/rak-phillip/ui-extension-remuda` via **Extensions → Manage Extension Catalogs** instead.
+
+## From a coding agent
+
+[`skills/remuda`](skills/remuda/README.md) is a skill that lets an agent create, follow, rebuild,
+stop and delete environments from a dashboard checkout, through the same Environment API the
+extension uses. In Claude Code, this repository is its own plugin marketplace:
+
+```
+/plugin marketplace add rak-phillip/remuda
+/plugin install remuda@remuda
+```
+
+Codex, pi and other agents that read [Agent Skills](https://agentskills.io) take the directory
+itself; the skill's README covers installing it there, the token it needs, and its configuration.
+
+The skill needs the controller to be installed already. On a new Rancher, create one environment from
+the extension first.
 
 ## Releasing
 

@@ -9,15 +9,28 @@ Zero dependencies. Node 20 or newer.
 ## Install
 
 The skill is a plain [Agent Skills](https://agentskills.io) directory: a `SKILL.md` plus the script it
-runs. Link it into whichever agent you use:
+runs.
 
-```sh
-ln -s "$PWD/skills/remuda" ~/.claude/skills/remuda   # Claude Code
-ln -s "$PWD/skills/remuda" ~/.agents/skills/remuda   # Codex and pi
+**Claude Code** — the repository is a plugin marketplace, so no clone is needed:
+
+```
+/plugin marketplace add rak-phillip/remuda
+/plugin install remuda@remuda
 ```
 
-A symlink rather than a copy, so the skill moves with the repository. Both directories are read from
-every project, which is what makes it usable from a `rancher/dashboard` checkout.
+The plugin follows `main`; `/plugin marketplace update remuda` picks up new commits.
+
+**Codex, pi and other agents** — clone the repository and link the directory into the agent's skills
+directory. A symlink rather than a copy, so the skill moves with the repository:
+
+```sh
+mkdir -p ~/.agents/skills
+ln -s "$PWD/skills/remuda" ~/.agents/skills/remuda
+```
+
+Codex and pi both read `~/.agents/skills`. Claude Code can take the same symlink at
+`~/.claude/skills/remuda` instead of the plugin, which is the convenient form while working on the
+skill itself. Use one or the other, not both, or the skill is listed twice.
 
 ## Configure
 
