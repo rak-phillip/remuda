@@ -227,29 +227,57 @@ describe('upgradeControllerIfBehind', () => {
    */
   const rancher = ({
     version = OLDER, values = undefined as any, status = 'deployed', allowed = true, available = [EXTENSION_VERSION],
-  } = {}) => storeOf((req: any) => {
-    if (req.url.includes('catalog.cattle.io.apps')) {
-      return version ? {
-        spec: {
-          chart: { metadata: { version } }, values, info: { status }
+    afterRefresh = undefined as string[] | undefined,
+  } = {}) => {
+    // A repository Rancher downloads again when its spec.forceUpdate is saved --
+    // and only when `afterRefresh` says what the new download lists. Without it
+    // the download never happens, as with a repository that cannot be reached.
+    let downloadTime = '2026-10-02T18:21:20Z';
+    let listed = available;
+
+    return storeOf((req: any) => {
+      if (req.url.endsWith('clusterrepos/remuda-rc')) {
+        if (req.method === 'PUT') {
+          if (afterRefresh) {
+            downloadTime = req.data.spec.forceUpdate;
+            listed = afterRefresh;
+          }
+
+          return req.data;
         }
-      } : new Error('404');
-    }
 
-    if (req.url.includes('selfsubjectaccessreviews')) {
-      return { status: { allowed } };
-    }
+        return {
+          metadata: { name: 'remuda-rc' }, spec: { url: 'https://example.com' }, status: { downloadTime }
+        };
+      }
 
-    if (req.url.endsWith('clusterrepos')) {
-      return repoList(['remuda-rc']);
-    }
+      if (req.url.includes('catalog.cattle.io.apps')) {
+        return version ? {
+          spec: {
+            chart: { metadata: { version } }, values, info: { status }
+          }
+        } : new Error('404');
+      }
 
-    if (req.url.includes('link=index')) {
-      return { entries: { [CONTROLLER_CHART]: available.map((v) => ({ version: v })) } };
-    }
+      if (req.url.includes('selfsubjectaccessreviews')) {
+        return { status: { allowed } };
+      }
 
-    return { operationName: 'helm-operation-x' };
-  });
+      if (req.url.endsWith('clusterrepos')) {
+        return repoList(['remuda-rc']);
+      }
+
+      if (req.url.includes('link=index')) {
+        return { entries: { [CONTROLLER_CHART]: listed.map((v) => ({ version: v })) } };
+      }
+
+      return { operationName: 'helm-operation-x' };
+    });
+  };
+
+  const NO_WAIT = { pollMs: 0, tries: 2 };
+
+  const refreshes = (store: ReturnType<typeof rancher>) => store.calls.filter((c: any) => c.method === 'PUT');
 
   const upgrades = (store: ReturnType<typeof rancher>) => store.calls.filter((c: any) => c.url.includes('action='));
 
@@ -312,10 +340,52 @@ describe('upgradeControllerIfBehind', () => {
 
   it('does not land on a version other than the extension\'s', async() => {
     // Installing falls back to the newest; an upgrade nobody asked for must not.
-    const store = rancher({ available: ['999.0.0', OLDER] });
+    const store = rancher({ available: ['999.0.0', OLDER], afterRefresh: ['999.0.0', OLDER] });
 
-    expect(await upgradeControllerIfBehind(store)).toBe('no-chart');
+    expect(await upgradeControllerIfBehind(store, NO_WAIT)).toBe('no-chart');
     expect(upgrades(store)).toHaveLength(0);
+  });
+
+  it('refreshes a repository whose index predates the controller, then upgrades', async() => {
+    // v0.3.0: Rancher fetched the index between the extension and the controller
+    // being published, and kept offering one without the other.
+    const store = rancher({ available: [OLDER], afterRefresh: [EXTENSION_VERSION, OLDER] });
+
+    expect(await upgradeControllerIfBehind(store, NO_WAIT)).toBe('upgraded');
+
+    const [put] = refreshes(store);
+
+    expect(put.url).toBe('/v1/catalog.cattle.io.clusterrepos/remuda-rc');
+    expect(put.data.spec).toMatchObject({ url: 'https://example.com' });
+    expect(put.data.spec.forceUpdate).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+    expect(upgrades(store)[0].data.charts[0].version).toBe(EXTENSION_VERSION);
+  });
+
+  it('answers no-chart when the repository never downloads again', async() => {
+    // The save only asks; until status.downloadTime moves, nothing changed.
+    const store = rancher({ available: [OLDER] });
+
+    expect(await upgradeControllerIfBehind(store, NO_WAIT)).toBe('no-chart');
+    expect(refreshes(store)).toHaveLength(1);
+    expect(upgrades(store)).toHaveLength(0);
+  });
+
+  it('answers no-chart when the refresh is refused', async() => {
+    const store = rancher({ available: [OLDER] });
+    const dispatch = store.dispatch;
+
+    store.dispatch = (action: string, req: any) => (req.method === 'PUT' ? Promise.reject(new Error('403')) : dispatch(action, req));
+
+    expect(await upgradeControllerIfBehind(store, NO_WAIT)).toBe('no-chart');
+    expect(upgrades(store)).toHaveLength(0);
+  });
+
+  it('does not refresh anything when the index already has the version', async() => {
+    const store = rancher();
+
+    await upgradeControllerIfBehind(store, NO_WAIT);
+
+    expect(refreshes(store)).toHaveLength(0);
   });
 
   it('does not swallow a failed upgrade', async() => {
