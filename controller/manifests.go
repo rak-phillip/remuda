@@ -795,10 +795,13 @@ func (s *renderSpec) buildJob(buildID string) *batchv1.Job {
 						// that many worker isolates, each with its own heap.
 						// Measured on rancher/dashboard master, node 24: ~4.3Gi
 						// at 2 CPU, ~5.3Gi at 4, ~6.0Gi at 8, ~7.4Gi uncapped
-						// on a 24-core node.
+						// on a 24-core node. requests.cpu is only what the
+						// scheduler reserves, so it stays small: a 2-core node
+						// already gives 1 CPU to the Rancher backend, and a
+						// 1 CPU request here left builds pending there.
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("1"),
+								corev1.ResourceCPU:    resource.MustParse("500m"),
 								corev1.ResourceMemory: resource.MustParse("4Gi"),
 							},
 							Limits: corev1.ResourceList{
