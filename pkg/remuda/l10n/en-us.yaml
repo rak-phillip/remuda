@@ -292,6 +292,10 @@ remuda:
     failed: >-
       Could not upgrade remuda-controller to {version}, so it no longer matches the
       extension: {error}
+    noChart: >-
+      Remuda {version} needs remuda-controller {version}, and no repository lists it,
+      even after a refresh. Builds and rebuilds may misbehave until it is installed:
+      check the repository under Apps → Repositories, then reload.
 
   error:
     createFailed: Could not create the environment

@@ -112,6 +112,21 @@ export async function canInstallController(
  * with a stable controller is a version skew nobody asked for.
  */
 export async function findControllerChart(store: any): Promise<ControllerChart | undefined> {
+  const found = await controllerIndexes(store);
+
+  const exact = found.find((f) => f.versions.some((v) => v.version === EXTENSION_VERSION));
+
+  if (exact) {
+    return { repo: exact.repo, version: EXTENSION_VERSION };
+  }
+
+  // The index lists newest first, which is what `helm repo index` writes and
+  // what every consumer of these indexes already relies on.
+  return found.length ? { repo: found[0].repo, version: found[0].versions[0].version } : undefined;
+}
+
+/** Every repository whose index lists remuda-controller, with the versions it lists. */
+async function controllerIndexes(store: any): Promise<{ repo: string; versions: any[] }[]> {
   let repos: any[] = [];
 
   try {
@@ -119,7 +134,7 @@ export async function findControllerChart(store: any): Promise<ControllerChart |
 
     repos = res?.data || [];
   } catch {
-    return undefined;
+    return [];
   }
 
   const indexes = await Promise.all(repos.map(async(repo: any) => {
@@ -139,17 +154,61 @@ export async function findControllerChart(store: any): Promise<ControllerChart |
     }
   }));
 
-  const found = indexes.filter(Boolean) as { repo: string; versions: any[] }[];
+  return indexes.filter(Boolean) as { repo: string; versions: any[] }[];
+}
 
-  const exact = found.find((f) => f.versions.some((v) => v.version === EXTENSION_VERSION));
+/** How long to wait for Rancher to download a refreshed index, and how often to look. */
+export interface RefreshPolling {
+  pollMs?: number;
+  tries?: number;
+}
 
-  if (exact) {
-    return { repo: exact.repo, version: EXTENSION_VERSION };
-  }
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  // The index lists newest first, which is what `helm repo index` writes and
-  // what every consumer of these indexes already relies on.
-  return found.length ? { repo: found[0].repo, version: found[0].versions[0].version } : undefined;
+/**
+ * Make Rancher download every repository that carries the controller again, and
+ * say whether any of them did.
+ *
+ * What the Refresh button under Apps -> Repositories does: set `spec.forceUpdate`
+ * and save. Rancher otherwise re-downloads an index only on its refresh
+ * interval, so an index fetched while a release was half published can go on
+ * offering the new extension without its controller for hours.
+ *
+ * Done when `status.downloadTime` moves, not when the save returns: the save
+ * only asks, and the download happens after it.
+ */
+async function refreshControllerRepos(store: any, { pollMs = 1000, tries = 15 }: RefreshPolling = {}): Promise<boolean> {
+  const names = (await controllerIndexes(store)).map((f) => f.repo);
+
+  const refreshed = await Promise.all(names.map(async(name) => {
+    const url = `${ CLUSTER_REPOS }/${ name }`;
+
+    try {
+      const repo = await store.dispatch('management/request', { url });
+      const before = repo?.status?.downloadTime;
+      const forceUpdate = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+      await store.dispatch('management/request', {
+        url, method: 'PUT', data: { ...repo, spec: { ...repo?.spec, forceUpdate } },
+      });
+
+      for (let i = 0; i < tries; i++) {
+        await sleep(pollMs);
+
+        const now = (await store.dispatch('management/request', { url }))?.status?.downloadTime;
+
+        if (now && now !== before) {
+          return true;
+        }
+      }
+    } catch {
+      // Treated as not refreshed: the caller reports what it could not find.
+    }
+
+    return false;
+  }));
+
+  return refreshed.some(Boolean);
 }
 
 /**
@@ -274,11 +333,17 @@ export type ControllerUpgrade = 'absent' | 'current' | 'busy' | 'forbidden' | 'n
  *   from another tab. Starting a second would only fail on Helm's release lock.
  * - forbidden: this user cannot update a CRD. The next admin to load the
  *   dashboard will.
- * - no-chart: no repository carries the extension's own version. Not the newest
- *   instead, as installing falls back to -- an upgrade nobody asked for must not
- *   land on a version nobody chose.
+ * - no-chart: no repository carries the extension's own version, even after
+ *   asking Rancher to download them again. Not the newest instead, as installing
+ *   falls back to -- an upgrade nobody asked for must not land on a version
+ *   nobody chose.
+ *
+ * Before answering no-chart it refreshes the repositories once. v0.3.0 showed
+ * why: Rancher fetched the index while the release had published the extension
+ * but not yet the controller, offered the extension, and this answered no-chart
+ * on every load until someone refreshed the repository by hand.
  */
-export async function upgradeControllerIfBehind(store: any): Promise<ControllerUpgrade> {
+export async function upgradeControllerIfBehind(store: any, polling: RefreshPolling = {}): Promise<ControllerUpgrade> {
   const installed = await installedController(store);
 
   if (!installed) {
@@ -297,7 +362,11 @@ export async function upgradeControllerIfBehind(store: any): Promise<ControllerU
     return 'forbidden';
   }
 
-  const chart = await findControllerChart(store);
+  let chart = await findControllerChart(store);
+
+  if (chart?.version !== EXTENSION_VERSION && await refreshControllerRepos(store, polling)) {
+    chart = await findControllerChart(store);
+  }
 
   if (chart?.version !== EXTENSION_VERSION) {
     return 'no-chart';
