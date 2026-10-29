@@ -174,14 +174,26 @@ with it. Two environments on shared crashlooped like this on 2026-10-14 until th
 
 The backend pod now runs a `webhook-watchdog` sidecar. It shares `/etc/rancher/k3s` with Rancher
 through an emptyDir, so it can read the kubeconfig k3s writes there. Whenever the nested apiserver
-answers and `rancher-webhook` has no endpoints, it deletes the `rancher.cattle.io` webhook
-configurations. Rancher then starts and reinstalls the webhook, which registers its configuration
-again. `kubectl logs <pod> -c webhook-watchdog` shows each time it acted.
+answers and `rancher-webhook` has no endpoints, it sets `failurePolicy: Ignore` on the
+`rancher.cattle.io` webhook configurations. A call that cannot reach the webhook is then let
+through, Rancher starts and brings the webhook back, and every call the webhook can reach is still
+checked. `kubectl logs <pod> -c webhook-watchdog` shows each time it acted.
 
-That the watchdog breaks the loop follows from the logs, but it has not yet been reproduced against
-a live environment. Downstream environments pick it up on the controller upgrade, which restarts
-their backends. On `local`, objects are only ever created and never updated, so existing
-environments there get it only when they are recreated.
+0.3.1-rc.2 deleted the configurations instead. That was wrong: they belong to the `rancher-webhook`
+chart, the webhook never registers them itself, and nothing reinstalls the chart unless its version
+changes. The webhook is briefly unready on every healthy start, so rc.2 left every environment it
+created with no Rancher admission webhooks at all, for good. Recreate any environment created or
+restarted under rc.2.
+
+Reproduced on `prak-adf9cab4` on 2026-10-29: all 37 validating webhooks at `Fail`, `rancher-webhook`
+scaled to zero, and the `rancher` container killed. The watchdog set `Ignore` as soon as the nested
+apiserver answered, and `/dashboard/` returned 200 73 seconds after the kill, with no further restarts.
+A ClusterRoleTemplateBinding naming a missing RoleTemplate was denied by the webhook while it was up,
+allowed while it was down, and denied again once it was back.
+
+Downstream environments pick the watchdog up on the controller upgrade, which restarts their
+backends. On `local`, objects are only ever created and never updated, so existing environments
+there get it only when they are recreated.
 
 ### dnsPolicy stays at ClusterFirst
 
