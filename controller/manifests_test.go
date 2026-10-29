@@ -673,6 +673,38 @@ func TestBuildJob(t *testing.T) {
 	}
 }
 
+// The bundle volume is ReadWriteOnce and the UI pod mounts it first. A build on
+// any other node sits in ContainerCreating forever on Longhorn.
+func TestBuildJobRunsBesideTheUIPod(t *testing.T) {
+	spec := testSpec()
+
+	affinity := spec.buildJob("1").Spec.Template.Spec.Affinity
+	if affinity == nil || affinity.PodAffinity == nil {
+		t.Fatal("build job has no pod affinity")
+	}
+
+	terms := affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if len(terms) != 1 {
+		t.Fatalf("%d required terms, want 1", len(terms))
+	}
+
+	if terms[0].TopologyKey != "kubernetes.io/hostname" {
+		t.Errorf("topologyKey = %q", terms[0].TopologyKey)
+	}
+
+	ui := spec.uiDeployment(1).Spec.Template.Labels
+	for key, value := range terms[0].LabelSelector.MatchLabels {
+		if ui[key] != value {
+			t.Errorf("selector %s=%s does not match the UI pod (%q)", key, value, ui[key])
+		}
+	}
+
+	build := spec.buildJob("1").Spec.Template.Labels
+	if build[LabelRole] == terms[0].LabelSelector.MatchLabels[LabelRole] {
+		t.Error("selector matches the build pod itself")
+	}
+}
+
 func TestBuildJobReadsAPrivateTokenFromASecret(t *testing.T) {
 	spec := testSpec()
 	spec.GitSecretName = "multi-idp-git"

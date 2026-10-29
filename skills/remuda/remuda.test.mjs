@@ -1,7 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import {
-  MAX_NAME, cloneUrl, detectAgent, environmentFor, environmentName, missingPins, repoSlug, summarize,
+  ESTIMATED_DISK_GB, MAX_NAME, backendOrigin, cloneUrl, detectAgent, diskShortfall, environmentFor, environmentName,
+  missingPins, repoSlug, summarize,
 } from './env.mjs';
 
 test('an ssh remote becomes the anonymous https URL the build pod can clone', () => {
@@ -98,4 +99,52 @@ test('a failing condition is reported, and Ready is not repeated as one', () => 
   });
 
   assert.deepEqual(s.problems, ['Resolved: needs ingressClass']);
+});
+
+test('an existing backend is reduced to its origin', () => {
+  assert.deepEqual(backendOrigin('https://prak-6b7be798.ui.rancher.space/'), { origin: 'https://prak-6b7be798.ui.rancher.space' });
+  assert.deepEqual(backendOrigin('https://rancher.example.com:8443'), { origin: 'https://rancher.example.com:8443' });
+  assert.ok(backendOrigin('https://rancher.example.com/dashboard/home').error);
+  assert.ok(backendOrigin('rancher.example.com').error);
+  assert.ok(backendOrigin('').error);
+});
+
+test('an environment in front of an existing Rancher carries nothing backend-shaped', () => {
+  const pins = {
+    ingressClass: 'traefik', storageClass: 'local-path', nestedPodCidr: '10.44.0.0/16', nestedServiceCidr: '10.45.0.0/16',
+  };
+  const body = environmentFor({
+    repo: 'https://github.com/rancher/dashboard', branch: 'master', clusterId: 'c-m-v9ql777p', pins,
+    backendUrl: 'https://prak-6b7be798.ui.rancher.space', prime: true,
+  });
+
+  assert.equal(body.spec.backendUrl, 'https://prak-6b7be798.ui.rancher.space');
+  assert.equal(body.spec.prime, undefined);
+  assert.equal(body.spec.nestedPodCidr, undefined);
+  assert.equal(body.spec.ingressClass, 'traefik');
+  assert.deepEqual(missingPins('c-m-v9ql777p', { ingressClass: 'traefik', storageClass: 'local-path' }, { externalBackend: true }), []);
+  assert.deepEqual(missingPins('c-m-v9ql777p', { ingressClass: 'traefik', storageClass: 'local-path' }), ['nestedPodCidr', 'nestedServiceCidr']);
+});
+
+test('prime is sent only when asked for', () => {
+  const asked = { repo: 'https://github.com/rancher/dashboard', branch: 'master' };
+
+  assert.equal(environmentFor({ ...asked, prime: true }).spec.prime, true);
+  assert.equal(environmentFor(asked).spec.prime, undefined);
+});
+
+test('the disk check warns before a node crosses the eviction line', () => {
+  const node = (gb) => ({ name: 'prak-dev-envs-pool1-zx8x5-w8vh5', capacityBytes: 155.9e9, availableBytes: gb * 1e9 });
+
+  // 18 GB free was the morning the backends crashlooped; 40 was after cleanup.
+  assert.equal(diskShortfall([node(18)], ESTIMATED_DISK_GB.ownBackend)?.afterGb, 10);
+  assert.equal(diskShortfall([node(40)], ESTIMATED_DISK_GB.ownBackend), undefined);
+  assert.equal(diskShortfall([], ESTIMATED_DISK_GB.ownBackend), undefined);
+});
+
+test('summarize carries the backend and edition', () => {
+  const s = summarize({ metadata: { name: 'x' }, spec: { backendUrl: 'https://r.example.com', prime: false } });
+
+  assert.equal(s.backend, 'https://r.example.com');
+  assert.equal(s.prime, false);
 });

@@ -13,8 +13,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { remudaClient, RemudaError } from './client.mjs';
 import {
-  DOWNSTREAM_PINS, HOST_CLUSTER, SOURCE, SOURCE_LABEL, cloneUrl, detectAgent, environmentFor, environmentName,
-  line, missingPins, repoSlug, summarize,
+  DOWNSTREAM_PINS, ESTIMATED_DISK_GB, HOST_CLUSTER, backendOrigin, cloneUrl, detectAgent, diskShortfall,
+  environmentFor, environmentName, line, missingPins, repoSlug, summarize,
 } from './env.mjs';
 
 const CONFIG_PATH = process.env.REMUDA_CONFIG || join(homedir(), '.config', 'remuda', 'config.json');
@@ -129,25 +129,74 @@ function connect() {
   return { cfg, api: remudaClient({ rancherUrl: cfg.rancherUrl, token: cfg.token, dryRun: cfg.dryRun }) };
 }
 
-function flags(argv) {
+/**
+ * The flags each command accepts, and whether each takes a value.
+ *
+ * Declared rather than inferred. The parser used to take any `--anything`, so
+ * `create --help` read as a create with a stray flag and built an environment
+ * from whatever checkout it was run in -- which on 2026-10-14 put a Remuda
+ * build of this repository onto a shared cluster that was already short on
+ * disk. An unknown flag is now an error, and `--help` is help everywhere.
+ */
+const FLAGS = {
+  doctor: {},
+  list:   {},
+  get:    {},
+  create: {
+    name: 'value', branch: 'value', repo: 'value', cluster: 'value', owner: 'value', backendUrl: 'value',
+    timeout: 'value', prime: 'bool', noWait: 'bool', print: 'bool', force: 'bool',
+  },
+  wait:     { timeout: 'value' },
+  rebuild:  {},
+  stop:     {},
+  start:    {},
+  delete:   {},
+  password: {},
+  name:     { branch: 'value', repo: 'value', name: 'value' },
+};
+
+const camel = (key) => key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+const kebab = (key) => key.replace(/[A-Z]/g, (c) => `-${ c.toLowerCase() }`);
+
+function flags(command, argv) {
+  const known = FLAGS[command] || {};
   const out = { _: [] };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
 
-    if (arg.startsWith('--')) {
-      const [key, inline] = arg.slice(2).split('=');
-      const camel = key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    if (arg === '--help' || arg === '-h') {
+      out.help = true;
+      continue;
+    }
 
-      if (inline !== undefined) {
-        out[camel] = inline;
-      } else if (argv[i + 1] && !argv[i + 1].startsWith('--')) {
-        out[camel] = argv[++i];
-      } else {
-        out[camel] = true;
-      }
-    } else {
+    if (!arg.startsWith('--')) {
       out._.push(arg);
+      continue;
+    }
+
+    const [raw, inline] = arg.slice(2).split(/=(.*)/s);
+    const key = camel(raw);
+    const kind = known[key];
+
+    if (!kind) {
+      const accepted = Object.keys(known).map((k) => `--${ kebab(k) }`).join(' ');
+
+      throw new Error(`${ command } does not take --${ raw }${ accepted ? ` (it takes ${ accepted })` : '' }. See: remuda ${ command } --help`);
+    }
+
+    if (kind === 'bool') {
+      if (inline !== undefined) {
+        throw new Error(`--${ raw } is a switch and takes no value`);
+      }
+
+      out[key] = true;
+    } else if (inline !== undefined) {
+      out[key] = inline;
+    } else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) {
+      out[key] = argv[++i];
+    } else {
+      throw new Error(`--${ raw } needs a value`);
     }
   }
 
@@ -167,8 +216,15 @@ const report = (env, password) => {
     console.log(`bundle    ${ s.bundle }`);
   }
 
-  if (password) {
+  if (s.backend) {
+    console.log(`backend   ${ s.backend }`);
+    console.log(`login     use ${ s.backend }'s own credentials -- this is that Rancher, not a copy of it`);
+  } else if (password) {
     console.log(`login     admin / ${ password }`);
+  }
+
+  if (s.prime) {
+    console.log('edition   Rancher Prime');
   }
 
   for (const problem of s.problems) {
@@ -242,6 +298,18 @@ const COMMANDS = {
 
     console.log(`controller ${ await api.ready() ? 'installed (Environment API answers)' : 'MISSING -- create one environment from the Remuda extension in the Rancher UI to install it' }`);
 
+    const disks = await api.nodeDisk(cfg.clusterId);
+
+    for (const d of disks) {
+      console.log(`disk      ${ d.name }: ${ (d.availableBytes / 1e9).toFixed(1) } GB free of ${ (d.capacityBytes / 1e9).toFixed(1) } GB`);
+    }
+
+    const short = diskShortfall(disks, ESTIMATED_DISK_GB.ownBackend);
+
+    if (short) {
+      console.log(`disk      LOW -- another environment would leave ${ short.node } with ${ short.afterGb } GB, under the ${ short.floorGb } GB where pods get evicted`);
+    }
+
     const here = checkout();
 
     console.log(`checkout  ${ here.error ? `${ here.branch || '?' } -- ${ here.error }` : `${ here.slug } @ ${ here.branch }` }`);
@@ -264,13 +332,23 @@ const COMMANDS = {
 
   async get(argv) {
     const { api } = connect();
-    const env = await api.get(flags(argv)._[0] || die('get needs a name'));
+    const env = await api.get(flags('get', argv)._[0] || die('get needs a name'));
 
     report(env, await api.password(env).catch(() => ''));
   },
 
   async create(argv) {
-    const opts = flags(argv);
+    const opts = flags('create', argv);
+    const backend = opts.backendUrl ? backendOrigin(opts.backendUrl) : {};
+
+    if (backend.error) {
+      die(backend.error);
+    }
+
+    if (backend.origin && opts.prime) {
+      die('--prime needs a backend of the environment\'s own; with --backend-url that Rancher decides whether it is Prime');
+    }
+
     const { cfg, api } = connect();
     const here = checkout();
     const repo = opts.repo || here.repo;
@@ -292,7 +370,7 @@ const COMMANDS = {
     }
 
     const clusterId = opts.cluster || cfg.clusterId;
-    const absent = missingPins(clusterId, cfg.pins);
+    const absent = missingPins(clusterId, cfg.pins, { externalBackend: !!backend.origin });
 
     if (absent.length) {
       die(`cluster ${ clusterId } is not the host cluster, so it needs ${ absent.join(', ') } -- Fleet cannot read them back. Set them in ${ CONFIG_PATH }`);
@@ -304,14 +382,28 @@ const COMMANDS = {
       clusterId,
       agent: detectAgent(process.env),
       owner: opts.owner || cfg.owner,
-      name:  opts.name,
-      pins:  cfg.pins,
+      name:       opts.name,
+      pins:       cfg.pins,
+      backendUrl: backend.origin,
+      prime:      opts.prime,
     });
 
     if (opts.print) {
       console.log(JSON.stringify(body, null, 2));
 
       return;
+    }
+
+    // local-path enforces no PVC size, so nothing else stops a node filling up
+    // until its kubelet starts evicting environments. --force skips this the
+    // same way it skips the pushed-branch check.
+    const short = diskShortfall(
+      await api.nodeDisk(clusterId), backend.origin ? ESTIMATED_DISK_GB.externalBackend : ESTIMATED_DISK_GB.ownBackend
+    );
+
+    if (short && !opts.force) {
+      die(`${ short.node } has ${ short.availableGb } GB free of ${ short.capacityGb } GB; this environment would leave about ${ short.afterGb } GB, ` +
+        `under the ${ short.floorGb } GB where Kubernetes starts evicting pods. Free space first (delete, not stop -- stop keeps the volumes), or pass --force`);
     }
 
     const { created, environment } = await api.create(body);
@@ -328,7 +420,7 @@ const COMMANDS = {
   },
 
   async wait(argv) {
-    const opts = flags(argv);
+    const opts = flags('wait', argv);
     const { api } = connect();
     const name = opts._[0] || die('wait needs a name');
     const env = await follow(api, name, Number(opts.timeout || 20));
@@ -338,7 +430,7 @@ const COMMANDS = {
 
   async rebuild(argv) {
     const { api } = connect();
-    const name = flags(argv)._[0] || die('rebuild needs a name');
+    const name = flags('rebuild', argv)._[0] || die('rebuild needs a name');
 
     await api.rebuild(name);
     console.log(`${ api.dryRun ? 'dry run: would rebuild' : 'rebuild requested for' } ${ name }`);
@@ -346,7 +438,7 @@ const COMMANDS = {
 
   async stop(argv) {
     const { api } = connect();
-    const name = flags(argv)._[0] || die('stop needs a name');
+    const name = flags('stop', argv)._[0] || die('stop needs a name');
 
     await api.stop(name);
     console.log(`stopped ${ name } (volumes, hostname and password are kept; the URL answers 503)`);
@@ -354,7 +446,7 @@ const COMMANDS = {
 
   async start(argv) {
     const { api } = connect();
-    const name = flags(argv)._[0] || die('start needs a name');
+    const name = flags('start', argv)._[0] || die('start needs a name');
 
     await api.start(name);
     console.log(`starting ${ name }`);
@@ -362,7 +454,7 @@ const COMMANDS = {
 
   async delete(argv) {
     const { api } = connect();
-    const name = flags(argv)._[0] || die('delete needs a name');
+    const name = flags('delete', argv)._[0] || die('delete needs a name');
 
     await api.remove(name);
     console.log(`deleted ${ name } -- every object it owns goes with it`);
@@ -370,27 +462,32 @@ const COMMANDS = {
 
   async password(argv) {
     const { api } = connect();
-    const env = await api.get(flags(argv)._[0] || die('password needs a name'));
+    const env = await api.get(flags('password', argv)._[0] || die('password needs a name'));
+    if (env?.spec?.backendUrl) {
+      console.log(`none -- ${ env.metadata.name } fronts ${ env.spec.backendUrl }; log in with that Rancher's own credentials`);
+
+      return;
+    }
+
     const password = await api.password(env);
 
     console.log(password ? `admin / ${ password }` : 'no bootstrap secret yet');
   },
 
   name(argv) {
-    const opts = flags(argv);
+    const opts = flags('name', argv);
     const here = checkout();
 
     console.log(environmentName(opts.repo || here.repo, opts.branch || here.branch, opts.name));
   },
 };
 
-const [command, ...rest] = process.argv.slice(2);
+const USAGE = `remuda <command> [--help]
 
-if (!command || command === '--help' || !COMMANDS[command]) {
-  console.log(`remuda <command>
-
-  doctor                     configuration, controller, and this checkout
+  doctor                     configuration, controller, disk, and this checkout
   create [--name N] [--branch B] [--repo URL] [--cluster ID] [--owner O]
+         [--backend-url URL]   only build the UI, in front of an existing Rancher
+         [--prime]             run the backend as Rancher Prime
          [--no-wait] [--timeout 20] [--print] [--force]
   list
   get <name>                 state, URL and login
@@ -401,9 +498,31 @@ if (!command || command === '--help' || !COMMANDS[command]) {
   password <name>
   name [--branch B]          the environment name a branch would get
 
+create builds from this checkout's remote and branch unless --repo/--branch say
+otherwise. --print shows the Environment without creating it. --force skips the
+pushed-branch and disk checks.
+
 Configuration: RANCHER_URL, REMUDA_TOKEN, REMUDA_CLUSTER, PIN_*, REMUDA_DRY_RUN=1,
-or ${ CONFIG_PATH }`);
-  process.exit(command && command !== '--help' ? 1 : 0);
+or ${ CONFIG_PATH }`;
+
+const [command, ...rest] = process.argv.slice(2);
+
+if (!command || command === '--help' || command === '-h' || !COMMANDS[command]) {
+  console.log(USAGE);
+  process.exit(command && command !== '--help' && command !== '-h' ? 1 : 0);
+}
+
+// Parsed once up front, before anything can touch the network, so a flag the
+// command does not know -- or a request for help -- can never fall through to
+// doing the command. Each command parses again for its own use; that is cheap
+// and keeps them readable on their own.
+try {
+  if (flags(command, rest).help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+} catch (e) {
+  die(e.message);
 }
 
 // Promise.resolve, because `name` is the one command that answers without a

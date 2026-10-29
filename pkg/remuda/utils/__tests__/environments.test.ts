@@ -367,6 +367,40 @@ describe('environmentCrBody', () => {
     expect(body.spec.hostname).toBeUndefined();
     expect(body.spec.backendImage).toBeUndefined();
   });
+
+  it('sends prime only when it was asked for', () => {
+    expect(environmentCrBody({ ...asked, prime: true }).spec.prime).toBe(true);
+    expect(environmentCrBody({ ...asked, prime: false }).spec.prime).toBeUndefined();
+  });
+
+  it('sends nothing backend-shaped in front of an existing Rancher', () => {
+    const external = {
+      ...asked,
+      clusterId:         'c-m-dff2ssd2',
+      backendUrl:        'https://prak-6b7be798.ui.rancher.space',
+      backendImage:      'rancher/rancher:head',
+      prime:             true,
+      dataSizeGb:        20,
+      dataStorageClass:  'ebs-gp3',
+      ingressClass:      'traefik',
+      storageClass:      'local-path',
+      nestedPodCidr:     '10.44.0.0/16',
+      nestedServiceCidr: '10.45.0.0/16',
+    };
+
+    const spec = environmentCrBody(external, { downstream: true }).spec;
+
+    expect(spec.backendUrl).toBe('https://prak-6b7be798.ui.rancher.space');
+
+    // The CRD refuses prime with backendUrl, and the rest configures a backend
+    // that does not exist.
+    for (const key of ['backendImage', 'prime', 'dataSizeGb', 'dataStorageClass', 'nestedPodCidr', 'nestedServiceCidr']) {
+      expect((spec as any)[key]).toBeUndefined();
+    }
+
+    // Fleet still cannot read these back, so they are still pinned.
+    expect(spec).toMatchObject({ ingressClass: 'traefik', storageClass: 'local-path' });
+  });
 });
 
 

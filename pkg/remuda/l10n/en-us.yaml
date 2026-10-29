@@ -80,6 +80,24 @@ remuda:
     gitSecretHint: Only needed for a private fork. Secret must hold a "token" key.
     backendLabel: Rancher server image
     backendHint: Derived from the branch when it names a release line, otherwise head.
+    backendModeLabel: Backend
+    backendModeOwn: Run a new Rancher for this environment
+    backendModeExternal: Use an existing Rancher
+    backendUrlLabel: Existing Rancher URL
+    backendUrlPlaceholder: https://rancher.example.com
+    backendUrlHint: >-
+      The Rancher to put this branch's UI in front of, such as an ROA instance.
+      Its address alone, without /dashboard or any other path.
+    externalBackendNotice: >-
+      Only this branch's UI is built. The environment serves it at its own
+      address and passes everything else to the existing Rancher, which is left
+      unchanged. Log in with that Rancher's own credentials. External auth
+      providers such as SAML or OIDC redirect back to that Rancher's own
+      address rather than to this one, so use a local user.
+    primeLabel: Rancher Prime
+    primeHint: >-
+      Runs the backend as Rancher Prime, so Prime-only UI and backend features
+      are switched on. Same image as community Rancher.
     hostnameLabel: Hostname
     sizes: Volume sizes (GiB)
     dataSize: Rancher data
@@ -113,6 +131,12 @@ remuda:
     url: URL
     username: Username
     password: Bootstrap password
+    backendUrl: Existing Rancher
+    prime: Rancher Prime
+    externalBackend: >-
+      This environment puts the branch's UI in front of {backend}, which is a
+      real Rancher and not a copy. Anything you create, change or delete here
+      happens on that Rancher. Log in with its own credentials.
     isolated: >-
       This is a self-contained Rancher running in its own nested cluster.
       Anything you create inside it stays inside it and cannot affect the cluster
@@ -194,6 +218,16 @@ remuda:
     cancel: Cancel
 
   warning:
+    lowDisk: >-
+      Node {node} has {availableGb} GB of {capacityGb} GB free. This environment
+      would leave about {afterGb} GB, below the {floorGb} GB at which Kubernetes
+      starts evicting pods to save disk. Environments already on that node can
+      stop starting once that happens. Free some space first, for example by
+      deleting environments nobody uses. Stopping one does not help, because
+      its volumes are kept.
+    backendUrlInvalid: >-
+      Enter the Rancher's address alone, starting with https://, for example
+      https://rancher.example.com.
     controllerForbidden: >-
       Remuda needs its controller to build environments, and installing it
       requires cluster-admin because it adds a custom resource definition. Ask an

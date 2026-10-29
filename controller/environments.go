@@ -119,15 +119,20 @@ func (c *controller) reconcileEnvironment(ctx context.Context, env *Environment)
 		log.Printf("%s: rebuild requested, starting build %s", env.Name, env.Status.BuildID)
 	}
 
-	password, err := c.ensurePassword(ctx, spec)
-	if err != nil {
-		setCondition(env, ConditionProvisioned, "False", "ProvisionFailed", err.Error())
-		_ = c.writeStatus(ctx, env)
+	// An external backend has its own login; there is nothing to bootstrap.
+	password := ""
 
-		return err
+	if spec.ownsBackend() {
+		password, err = c.ensurePassword(ctx, spec)
+		if err != nil {
+			setCondition(env, ConditionProvisioned, "False", "ProvisionFailed", err.Error())
+			_ = c.writeStatus(ctx, env)
+
+			return err
+		}
 	}
 
-	if err := delivery.Apply(ctx, spec, password, env.Status.BuildID, env.Spec.Running); err != nil {
+	if err := delivery.Apply(ctx, spec, password, deliveredBuildID(env), env.Spec.Running); err != nil {
 		setCondition(env, ConditionProvisioned, "False", "ProvisionFailed", err.Error())
 		_ = c.writeStatus(ctx, env)
 
@@ -150,7 +155,63 @@ func (c *controller) reconcileEnvironment(ctx context.Context, env *Environment)
 		return err
 	}
 
+	if retireStuckBuild(env, spec, seen) {
+		log.Printf("%s: build Job %s can no longer be updated in place; no longer delivering it",
+			env.Name, spec.buildJobName(env.Status.BuildID))
+	}
+
 	return c.recordStatus(ctx, env, spec, hop, seen)
+}
+
+// deliveredBuildID is the build whose Job the render should carry, or empty
+// for none.
+func deliveredBuildID(env *Environment) string {
+	if env.Status.RetiredBuildID != "" && env.Status.RetiredBuildID == env.Status.BuildID {
+		return ""
+	}
+
+	return env.Status.BuildID
+}
+
+// retireStuckBuild stops delivering a build Job that Fleet can no longer apply.
+//
+// A Job's pod template is immutable, and Fleet applies the whole Bundle every
+// time it changes. So the first controller release to render build Jobs
+// differently -- 0.3.0, which halved the CPU request -- left every downstream
+// environment built before it with a Bundle that could never be applied again:
+//
+//	server-side apply failed for object .../supercharged-tables-build-1790804111
+//	... Kind=Job: Job.batch ... spec.template: Invalid value: ...: field is immutable
+//
+// Fleet reports that as not ready, so the environment read Pending for good
+// while serving perfectly well.
+//
+// Renaming the Job would apply cleanly, and is the wrong fix: it starts a new
+// build, so every downstream environment would rebuild at once on the next
+// upgrade, at 4Gi each. Dropping the Job does not. The build it describes has
+// already run, its output stays on the ui volume, and the next rebuild names a
+// new Job, which is delivered as normal.
+//
+// Only a build-Job conflict qualifies. Anything else Fleet reports is a real
+// problem, and is left showing as one.
+func retireStuckBuild(env *Environment, spec *renderSpec, seen observation) bool {
+	buildID := env.Status.BuildID
+
+	if buildID == "" || env.Status.RetiredBuildID == buildID {
+		return false
+	}
+
+	job := spec.buildJobName(buildID)
+
+	for _, stuck := range seen.ImmutableJobs {
+		if stuck == job {
+			env.Status.RetiredBuildID = buildID
+
+			return true
+		}
+	}
+
+	return false
 }
 
 // applyHop creates the objects that let the host cluster front a downstream
@@ -201,6 +262,22 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 		return nil, nil, err
 	}
 
+	backendURL := ""
+
+	if env.Spec.BackendURL != "" {
+		if backendURL, err = NormalizeBackendURL(env.Spec.BackendURL); err != nil {
+			return nil, nil, err
+		}
+
+		// Prime is how a backend runs, and this environment has no backend of
+		// its own to run that way. Refused rather than ignored, so nobody waits
+		// for a Prime UI that the borrowed Rancher will never report.
+		if env.Spec.Prime {
+			return nil, nil, fmt.Errorf("spec.prime needs a backend of the environment's own; " +
+				"with spec.backendUrl the Rancher at that address decides whether it is Prime")
+		}
+	}
+
 	spec := &renderSpec{
 		Name:          env.Name,
 		Namespace:     env.Namespace,
@@ -212,6 +289,8 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 		DataSizeGB:    env.Spec.DataSizeGB,
 		UISizeGB:      env.Spec.UISizeGB,
 		CacheSizeGB:   env.Spec.CacheSizeGB,
+		BackendURL:    backendURL,
+		Prime:         env.Spec.Prime,
 		OwnerRef:      ownerRefFor(env),
 	}
 
@@ -219,7 +298,9 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 	// workload runs: the image is chosen against the host Rancher's own version,
 	// and the hostname comes off the host's wildcard, which is the only DNS that
 	// resolves to anything either way.
-	spec.BackendImage = pick(env.Spec.BackendImage, BackendImageForBranch(env.Spec.Branch, defaults.ServerVersion))
+	if spec.ownsBackend() {
+		spec.BackendImage = pick(env.Spec.BackendImage, BackendImageForBranch(env.Spec.Branch, defaults.ServerVersion))
+	}
 
 	// Outside the split below because they are never resolved from anywhere:
 	// nothing can discover which of a cluster's classes is the durable one, so
@@ -287,7 +368,7 @@ func (c *controller) resolve(ctx context.Context, env *Environment) (*renderSpec
 		return nil, nil, fmt.Errorf("no spec.ingressClass, and the host cluster publishes no IngressClass to fall back on")
 	}
 
-	if spec.NestedPodCIDR == "" || spec.NestedServiceCIDR == "" {
+	if spec.ownsBackend() && (spec.NestedPodCIDR == "" || spec.NestedServiceCIDR == "") {
 		// Defaulting these blindly is the one shortcut that must not be taken:
 		// a nested k3s sharing the host's CIDRs cannot reach its own CoreDNS,
 		// and nothing in the environment recovers from it.
@@ -392,15 +473,22 @@ func (c *controller) resolveHop(ctx context.Context, env *Environment, defaults 
 func requirePinned(env *Environment, spec *renderSpec) error {
 	var missing []string
 
-	for _, field := range []struct {
-		name  string
-		value string
-	}{
+	type pin struct{ name, value string }
+
+	fields := []pin{
 		{"spec.ingressClass", spec.IngressClass},
 		{"spec.storageClass", spec.StorageClass},
-		{"spec.nestedPodCidr", spec.NestedPodCIDR},
-		{"spec.nestedServiceCidr", spec.NestedServiceCIDR},
-	} {
+	}
+
+	// The CIDRs configure a nested k3s, and an external backend has none.
+	if spec.ownsBackend() {
+		fields = append(fields,
+			pin{"spec.nestedPodCidr", spec.NestedPodCIDR},
+			pin{"spec.nestedServiceCidr", spec.NestedServiceCIDR},
+		)
+	}
+
+	for _, field := range fields {
 		if field.value == "" {
 			missing = append(missing, field.name)
 		}
@@ -540,6 +628,20 @@ func (c *controller) createFor(ctx context.Context, namespace string, m manifest
 // bootstrapped with the old one.
 func (c *controller) ensurePassword(ctx context.Context, spec *renderSpec) (string, error) {
 	existing, err := c.core.CoreV1().Secrets(spec.Namespace).Get(ctx, spec.bootstrapSecretName(), metav1.GetOptions{})
+	if err == nil && ownedByAnother(existing.OwnerReferences, spec.OwnerRef) {
+		// Left by an earlier environment of the same name and not yet
+		// collected. Its password belongs to that environment's Rancher;
+		// handing it to this one and then generating a fresh one once the
+		// collector catches up would change the password under a Rancher
+		// already bootstrapped with the first.
+		err := c.core.CoreV1().Secrets(spec.Namespace).Delete(ctx, existing.Name, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("removing the bootstrap secret of an earlier environment of this name: %w", err)
+		}
+
+		return "", fmt.Errorf("removed the bootstrap secret of an earlier environment of this name; a new one is made on the next pass")
+	}
+
 	if err == nil {
 		if password := string(existing.Data["password"]); password != "" {
 			return password, nil
@@ -588,6 +690,19 @@ func (c *controller) ensurePassword(ctx context.Context, spec *renderSpec) (stri
 	return string(created.Data["password"]), nil
 }
 
+// ownedByAnother reports whether an object names an owner of the same kind as
+// want but a different UID: an earlier incarnation of the same environment.
+// No owner at all is not another's; it may have been written by hand.
+func ownedByAnother(refs []metav1.OwnerReference, want metav1.OwnerReference) bool {
+	for _, ref := range refs {
+		if ref.Kind == want.Kind && ref.Name == want.Name && ref.UID != want.UID {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ensure runs create and treats "already exists" as the success it is.
 func (c *controller) ensure(ctx context.Context, kind, name string, create func() error) error {
 	err := create()
@@ -619,6 +734,10 @@ func (c *controller) setRunning(ctx context.Context, spec *renderSpec, running b
 
 	if running {
 		names = []string{spec.uiName(), spec.Name}
+	}
+
+	if !spec.ownsBackend() {
+		names = []string{spec.uiName()}
 	}
 
 	replicas := replicasFor(running)
@@ -710,7 +829,7 @@ func (c *controller) observeDirect(ctx context.Context, spec *renderSpec) (obser
 		return observation{}, err
 	}
 
-	deployment, err := c.core.AppsV1().Deployments(spec.Namespace).Get(ctx, spec.Name, metav1.GetOptions{})
+	deployment, err := c.core.AppsV1().Deployments(spec.Namespace).Get(ctx, spec.workloadName(), metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return observation{}, err
 	}
@@ -742,7 +861,11 @@ func (c *controller) recordStatus(
 	env.Status.SharedBundleURL = spec.SharedBundleURL()
 	env.Status.Build = seen.Build
 	env.Status.Run = seen.Run
-	env.Status.BootstrapSecret = spec.bootstrapSecretName()
+	env.Status.BootstrapSecret = ""
+
+	if spec.ownsBackend() {
+		env.Status.BootstrapSecret = spec.bootstrapSecretName()
+	}
 	env.Status.ObservedGeneration = env.Generation
 	env.Status.Resolved = ResolvedSpec{
 		BackendImage:      spec.BackendImage,

@@ -78,6 +78,12 @@ func nextBuildID(previous string, now time.Time) string {
 // period, which is well inside the minutes a new build spends cloning and
 // installing before it touches the volume.
 func (c *controller) sweepSupersededBuilds(ctx context.Context, spec *renderSpec, buildID string) error {
+	// No current build to keep means nothing is superseded. Sweeping anyway
+	// would delete the only Job there is.
+	if buildID == "" {
+		return nil
+	}
+
 	jobs, err := c.jobsFor(ctx, spec.Name)
 	if err != nil {
 		return err

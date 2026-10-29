@@ -122,7 +122,16 @@ const directDrifted = computed(() => {
     live.length > 0 && !live.some((address) => hostname.includes(address));
 });
 
-const peekUrl = computed(() => (spec.value ? `/k8s/clusters/${ clusterId }/api/v1/namespaces/${ spec.value.namespace }/services/http:${ spec.value.name }:80/proxy/` : ''));
+/**
+ * In front of an existing Rancher there is no backend of the environment's own,
+ * no password to bootstrap it with, and nothing isolated about it: whatever is
+ * done through this UI is done to that Rancher.
+ */
+const externalBackend = computed(() => !!spec.value?.backendUrl);
+
+// The bundle server is the whole environment when the backend is borrowed.
+const peekService = computed(() => (externalBackend.value ? `${ spec.value?.name }-ui` : spec.value?.name));
+const peekUrl = computed(() => (spec.value ? `/k8s/clusters/${ clusterId }/api/v1/namespaces/${ spec.value.namespace }/services/http:${ peekService.value }:80/proxy/` : ''));
 
 async function loadPassword(env: RemudaSpec) {
   try {
@@ -161,7 +170,7 @@ async function load() {
     runState.value = found.source === 'cr' ? crRunState(found.cr!) : runStateOf(backend);
     jobs.value = (allJobs.data || []).filter((j: any) => j.metadata?.labels?.[LABEL_NAME] === found.spec.name);
 
-    if (!password.value) {
+    if (!password.value && !found.spec.backendUrl) {
       await loadPassword(found.spec);
     }
 
@@ -329,7 +338,15 @@ onUnmounted(() => clearInterval(timer));
         :label="i18n.t('remuda.detail.stoppingHint')"
       />
 
-      <p class="text-muted">
+      <Banner
+        v-if="externalBackend"
+        color="warning"
+        :label="i18n.t('remuda.detail.externalBackend', { backend: spec.backendUrl })"
+      />
+      <p
+        v-else
+        class="text-muted"
+      >
         {{ i18n.t('remuda.detail.isolated') }}
       </p>
 
@@ -344,37 +361,49 @@ onUnmounted(() => clearInterval(timer));
           >{{ url }}</a>
         </dd>
 
-        <dt>{{ i18n.t('remuda.detail.username') }}</dt>
-        <dd>
-          <code>{{ BOOTSTRAP_USERNAME }}</code>
-          <RcButton
-            variant="link"
-            size="small"
-            @click="copy(BOOTSTRAP_USERNAME)"
-          >
-            {{ i18n.t('remuda.detail.copy') }}
-          </RcButton>
-        </dd>
+        <template v-if="externalBackend">
+          <dt>{{ i18n.t('remuda.detail.backendUrl') }}</dt>
+          <dd>
+            <a
+              :href="spec.backendUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+            >{{ spec.backendUrl }}</a>
+          </dd>
+        </template>
+        <template v-else>
+          <dt>{{ i18n.t('remuda.detail.username') }}</dt>
+          <dd>
+            <code>{{ BOOTSTRAP_USERNAME }}</code>
+            <RcButton
+              variant="link"
+              size="small"
+              @click="copy(BOOTSTRAP_USERNAME)"
+            >
+              {{ i18n.t('remuda.detail.copy') }}
+            </RcButton>
+          </dd>
 
-        <dt>{{ i18n.t('remuda.detail.password') }}</dt>
-        <dd>
-          <code v-if="revealed">{{ password }}</code>
-          <code v-else>••••••••••••</code>
-          <RcButton
-            variant="link"
-            size="small"
-            @click="revealed = !revealed"
-          >
-            {{ i18n.t(revealed ? 'remuda.detail.hide' : 'remuda.detail.show') }}
-          </RcButton>
-          <RcButton
-            variant="link"
-            size="small"
-            @click="copy(password)"
-          >
-            {{ i18n.t('remuda.detail.copy') }}
-          </RcButton>
-        </dd>
+          <dt>{{ i18n.t('remuda.detail.password') }}</dt>
+          <dd>
+            <code v-if="revealed">{{ password }}</code>
+            <code v-else>••••••••••••</code>
+            <RcButton
+              variant="link"
+              size="small"
+              @click="revealed = !revealed"
+            >
+              {{ i18n.t(revealed ? 'remuda.detail.hide' : 'remuda.detail.show') }}
+            </RcButton>
+            <RcButton
+              variant="link"
+              size="small"
+              @click="copy(password)"
+            >
+              {{ i18n.t('remuda.detail.copy') }}
+            </RcButton>
+          </dd>
+        </template>
 
         <dt>{{ i18n.t('remuda.list.columns.backend') }}</dt>
         <dd>{{ i18n.t(`remuda.state.${runState}`) }}</dd>
@@ -391,8 +420,13 @@ onUnmounted(() => clearInterval(timer));
         <dt>{{ i18n.t('remuda.create.branchLabel') }}</dt>
         <dd><code>{{ spec.branch }}</code></dd>
 
-        <dt>{{ i18n.t('remuda.detail.backendImage') }}</dt>
-        <dd><code>{{ spec.backendImage }}</code></dd>
+        <template v-if="!externalBackend">
+          <dt>{{ i18n.t('remuda.detail.backendImage') }}</dt>
+          <dd>
+            <code>{{ spec.backendImage }}</code>
+            <span v-if="spec.prime"> ({{ i18n.t('remuda.detail.prime') }})</span>
+          </dd>
+        </template>
 
         <dt>Asset base</dt>
         <dd><code>{{ assetBase }}</code></dd>

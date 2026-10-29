@@ -71,6 +71,43 @@ Two caveats, both surfaced on the detail page:
 Environments created before this existed have neither the ConfigMap nor the mount, so they serve
 the bundle without the header. Recreate them to share their builds.
 
+## Using an existing Rancher
+
+An environment does not have to bring its own backend. Choose **Use an existing Rancher** on the
+create form, or pass `--backend-url` to the skill, and give the address of a Rancher that already
+exists, such as one provisioned with ROA. Remuda then builds only the branch's UI. It serves the UI
+at the environment's own hostname and proxies everything else to that Rancher, the way
+`API=<url> yarn dev` does from a laptop:
+
+- `/ui-bundle/` and `/dashboard/` are served from the build. Every route under `/dashboard/` is the
+  bundle's `index.html`, which is also how Rancher serves a `ui-dashboard-index`.
+- Every other path is proxied, rather than a list of known API prefixes. A new `/v1-*` callback
+  then works without a change here.
+- The proxy sends the backend's own `Host`, and rewrites `Origin` to it when the browser sent one,
+  because Rancher refuses websockets from another origin. `X-API-Host` is set to the environment's
+  host, so links in API responses point back through the proxy. Verified against a live Rancher:
+  API reads, and a `101` websocket upgrade on `/v1/subscribe` that the same Rancher refuses with
+  `403` when reached directly from that origin.
+- The backend is resolved per request, so nginx starts, and the bundle is served, even while the
+  backend is down.
+
+The Rancher behind it is left untouched, and any number of branches can share one. What it costs:
+
+- **It is the real Rancher.** Anything done through the environment happens there. The detail page
+  says so.
+- **Log in with that Rancher's own credentials.** There is no bootstrap password.
+- **Use local auth.** SAML, OIDC and the other external providers redirect to the backend's own
+  `server-url`, not back to the environment.
+
+It is also much lighter, with no data volume and no nested cluster. See [Disk](#disk).
+
+## Rancher Prime
+
+**Rancher Prime** on the create form (`--prime` in the skill) runs the backend with
+`RANCHER_VERSION_TYPE=prime`. That is the whole difference: Prime is a runtime setting of the same
+`rancher/rancher` image, and both `/rancherversion` and the backend's Prime-only features read it.
+It is not offered with an existing Rancher, which already is whatever it is.
+
 ## Running Rancher inside Kubernetes
 
 The backend image is the single-container Rancher, which starts its own k3s in the pod. Two things
@@ -120,6 +157,31 @@ made it present as intermittent. A pod cannot fix it with `securityContext.sysct
 accept namespaced sysctls -- so the backend runs a privileged init container that writes
 `/proc/sys/fs/inotify/*` directly. It is best-effort and echoes the resulting values, so
 `kubectl logs <pod> -c raise-inotify-limits` says what actually took effect.
+
+### A lost rancher-webhook is removed, not waited for
+
+If the nested cluster loses its `rancher-webhook` pod, for example to eviction under disk pressure,
+the backend cannot start again. The webhook's admission configuration outlives the pod, with
+`failurePolicy: Fail`, so the namespace Rancher creates during startup is refused:
+
+```
+[FATAL] Internal error occurred: failed calling webhook "rancher.cattle.io.namespaces.create-non-kubesystem":
+... no endpoints available for service "rancher-webhook"
+```
+
+Rancher is what would reinstall the webhook, and it exits about 25 seconds in, taking the nested k3s
+with it. Two environments on shared crashlooped like this on 2026-10-14 until they were recreated.
+
+The backend pod now runs a `webhook-watchdog` sidecar. It shares `/etc/rancher/k3s` with Rancher
+through an emptyDir, so it can read the kubeconfig k3s writes there. Whenever the nested apiserver
+answers and `rancher-webhook` has no endpoints, it deletes the `rancher.cattle.io` webhook
+configurations. Rancher then starts and reinstalls the webhook, which registers its configuration
+again. `kubectl logs <pod> -c webhook-watchdog` shows each time it acted.
+
+That the watchdog breaks the loop follows from the logs, but it has not yet been reproduced against
+a live environment. Downstream environments pick it up on the controller upgrade, which restarts
+their backends. On `local`, objects are only ever created and never updated, so existing
+environments there get it only when they are recreated.
 
 ### dnsPolicy stays at ClusterFirst
 
@@ -323,6 +385,27 @@ Environments created by an older version keep working without it: they are manag
 as they always were, and stay startable, stoppable and deletable. Only new environments need it.
 
 ## Resource cost
+
+### Disk
+
+Disk is the limit that bites first, and nothing enforces it. `local-path`, the storage class most
+targets use, is a hostPath on the node's root disk and ignores PVC sizes. Each environment asks for
+20 + 8 + 2 GiB, so on 2026-10-14 nine of them requested 270 GiB from a 145 GiB disk. That disk sat
+at 89–95% full, the kubelet evicted a backend, and two more crashlooped.
+
+What an environment actually writes is roughly **8 GB** with a backend of its own, most of it the
+nested cluster's images and etcd, and roughly **4 GB** in front of an existing Rancher. These are
+estimates from what deleting environments freed, not measurements of each one. The kubelet starts
+evicting pods when its image filesystem drops below **15% free**. Every nested k3s runs its own
+kubelet against the same disk, so crossing that line hurts every environment on the node at once.
+
+The create form warns when the roomiest node on the target would fall under that line. So does the
+skill's `create`, which refuses unless given `--force`, and `doctor` prints each node's free space.
+Both read the kubelet's summary through Rancher's cluster proxy, which needs an admin. Anyone else
+sees no warning. **Stopping an environment frees no disk**, because it keeps its volumes. Only
+deleting one does.
+
+### CPU and memory
 
 A build needs roughly **5.5 GiB of memory** at the Job's 4 CPU limit, which is why it requests
 4Gi and is capped at 7Gi.

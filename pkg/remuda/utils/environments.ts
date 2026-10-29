@@ -222,16 +222,32 @@ export function environmentCrBody(spec: Partial<RemudaSpec> & {
   // storage classes belong here rather than in the downstream-only list below:
   // they are never resolved from any cluster, so there is nothing for the host
   // case to discover and no reason to withhold them from it.
-  (['clusterId', 'owner', 'backendImage', 'hostname', 'entryPort',
-    'dataSizeGb', 'uiSizeGb', 'cacheSizeGb',
-    'dataStorageClass', 'uiStorageClass', 'cacheStorageClass'] as (keyof RemudaSpec)[]).forEach(pin);
+  (['clusterId', 'owner', 'hostname', 'entryPort',
+    'uiSizeGb', 'cacheSizeGb', 'uiStorageClass', 'cacheStorageClass'] as (keyof RemudaSpec)[]).forEach(pin);
+
+  // Everything that describes a backend of the environment's own -- its image,
+  // its etcd volume, the nested cluster's CIDRs -- means nothing in front of a
+  // Rancher that already exists, so none of it is sent. Prime only when asked
+  // for: false is the schema's default, and pinning it says nothing.
+  if (spec.backendUrl) {
+    pin('backendUrl');
+  } else {
+    (['backendImage', 'dataSizeGb', 'dataStorageClass'] as (keyof RemudaSpec)[]).forEach(pin);
+
+    if (spec.prime) {
+      body.spec.prime = true;
+    }
+  }
 
   // Fleet delivers without reading back, and the controller can only see the
   // host -- a wrong answer rather than a missing one. See "What a downstream
   // environment must pin" in controller/README.md.
   if (opts.downstream) {
-    (['ingressClass', 'storageClass', 'nestedPodCidr',
-      'nestedServiceCidr'] as (keyof RemudaSpec)[]).forEach(pin);
+    (['ingressClass', 'storageClass'] as (keyof RemudaSpec)[]).forEach(pin);
+
+    if (!spec.backendUrl) {
+      (['nestedPodCidr', 'nestedServiceCidr'] as (keyof RemudaSpec)[]).forEach(pin);
+    }
   }
 
   return body;
