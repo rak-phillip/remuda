@@ -69,6 +69,12 @@ spec:
               required:
                 - repo
                 - branch
+              x-kubernetes-validations:
+                - rule: '!(has(self.backendUrl) && self.backendUrl != "" && has(self.prime) && self.prime)'
+                  message: >-
+                    prime needs a backend of the environment's own; with
+                    backendUrl the Rancher at that address decides whether it is
+                    Prime.
               description: >-
                 What was asked for. Only repo and branch are required -- every
                 other field is either defaulted here or resolved by the
@@ -114,6 +120,24 @@ spec:
                     Who it belongs to, for display and for the
                     remuda.rancher.io/owner label. The UI fills this from the
                     logged-in user; a scripted create may leave it empty.
+                backendUrl:
+                  type: string
+                  pattern: '^https?://[^/?#@]+/?$'
+                  description: >-
+                    An existing Rancher to use instead of running one -- an ROA
+                    instance, say -- as its origin alone, e.g.
+                    https://rancher.example.com. Only the UI is built; the
+                    environment serves it and proxies everything else to this
+                    Rancher, as `API=<url> yarn dev` does. Log in with that
+                    Rancher's own credentials. External auth providers redirect
+                    to its server-url rather than back here, so use local auth.
+                prime:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Run the backend as Rancher Prime: the same image with
+                    RANCHER_VERSION_TYPE=prime. Not allowed with backendUrl,
+                    where the Rancher at that address decides.
                 backendImage:
                   type: string
                   description: >-
@@ -254,6 +278,14 @@ spec:
                     The spec.rebuildRequest the current buildId answers. A spec
                     value that differs from this is a rebuild that has been asked
                     for and not yet started.
+                retiredBuildId:
+                  type: string
+                  description: >-
+                    A build whose Job is no longer delivered through Fleet,
+                    because a change in how the controller renders build Jobs
+                    could not be applied to it -- a Job's pod template is
+                    immutable. The build had already run and its bundle is still
+                    served. The next rebuild delivers a new Job as normal.
                 build:
                   type: string
                   enum:

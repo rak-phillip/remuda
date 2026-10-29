@@ -62,6 +62,64 @@ export const MAX_NAME = 63 - '-build-'.length - 10;
 export const DOWNSTREAM_PINS = ['ingressClass', 'storageClass', 'nestedPodCidr', 'nestedServiceCidr'];
 
 /**
+ * The pins that configure a nested k3s, which an environment in front of an
+ * existing Rancher does not have.
+ */
+const BACKEND_PINS = ['nestedPodCidr', 'nestedServiceCidr'];
+
+/**
+ * An existing Rancher's origin, or an error saying why it is not one. The
+ * controller and the CRD apply the same rule; checking here saves a round trip
+ * and says it in the terminal.
+ */
+export function backendOrigin(raw) {
+  let url;
+
+  try {
+    url = new URL(String(raw || '').trim());
+  } catch {
+    return { error: `--backend-url must be a URL such as https://rancher.example.com (got ${ JSON.stringify(raw) })` };
+  }
+
+  if (!/^https?:$/.test(url.protocol) || !url.host || (url.pathname !== '/' && url.pathname !== '') || url.search || url.username) {
+    return { error: `--backend-url must be the Rancher's address alone, e.g. https://rancher.example.com (got ${ JSON.stringify(raw) })` };
+  }
+
+  return { origin: `${ url.protocol }//${ url.host }` };
+}
+
+/**
+ * What an environment writes to its node's disk, and where that gets
+ * dangerous. The same estimates and threshold as the extension's
+ * utils/capacity.ts, which explains both; kept in step by hand because this
+ * script has no dependencies.
+ */
+export const ESTIMATED_DISK_GB = { ownBackend: 8, externalBackend: 4 };
+export const DISK_PRESSURE_FRACTION = 0.15;
+
+/** The shortfall on the roomiest node, or undefined when there is room. */
+export function diskShortfall(nodes, needGb) {
+  const usable = (nodes || []).filter((n) => n.capacityBytes > 0);
+
+  if (!usable.length) {
+    return undefined;
+  }
+
+  const roomiest = usable.reduce((a, b) => (b.availableBytes > a.availableBytes ? b : a));
+  const round = (n) => Math.round(n * 10) / 10;
+  const afterGb = roomiest.availableBytes / 1e9 - needGb;
+  const floorGb = roomiest.capacityBytes / 1e9 * DISK_PRESSURE_FRACTION;
+
+  return afterGb >= floorGb ? undefined : {
+    node:        roomiest.name,
+    availableGb: round(roomiest.availableBytes / 1e9),
+    capacityGb:  round(roomiest.capacityBytes / 1e9),
+    afterGb:     round(afterGb),
+    floorGb:     round(floorGb),
+  };
+}
+
+/**
  * A clone URL the build Job can actually use.
  *
  * The build pod has no SSH key and no GitHub credentials, so an `origin` of
@@ -135,10 +193,19 @@ export function environmentName(repo, branch, override) {
  * with.
  */
 export function environmentFor({
-  repo, branch, owner, name, clusterId, agent = 'unknown', pins = {}, annotations = {},
+  repo, branch, owner, name, clusterId, agent = 'unknown', pins = {}, annotations = {}, backendUrl, prime,
 }) {
   const envName = environmentName(repo, branch, name);
   const spec = { repo: cloneUrl(repo), branch };
+
+  // An existing Rancher to put the UI in front of, rather than a backend of
+  // the environment's own. Prime describes a backend of its own, so the two
+  // never travel together; the CRD refuses the pair.
+  if (backendUrl) {
+    spec.backendUrl = backendUrl;
+  } else if (prime) {
+    spec.prime = true;
+  }
 
   if (owner) {
     // Copied into a label on every object the controller creates, so it has to
@@ -150,7 +217,7 @@ export function environmentFor({
     spec.clusterId = clusterId;
 
     for (const key of DOWNSTREAM_PINS) {
-      if (pins[key]) {
+      if (pins[key] && !(backendUrl && BACKEND_PINS.includes(key))) {
         spec[key] = pins[key];
       }
     }
@@ -170,8 +237,12 @@ export function environmentFor({
 }
 
 /** Which required pins a downstream Environment is missing, if any. */
-export function missingPins(clusterId, pins = {}) {
-  return (!clusterId || clusterId === HOST_CLUSTER) ? [] : DOWNSTREAM_PINS.filter((key) => !pins[key]);
+export function missingPins(clusterId, pins = {}, { externalBackend = false } = {}) {
+  if (!clusterId || clusterId === HOST_CLUSTER) {
+    return [];
+  }
+
+  return DOWNSTREAM_PINS.filter((key) => !pins[key] && !(externalBackend && BACKEND_PINS.includes(key)));
 }
 
 /**
@@ -198,6 +269,8 @@ export function summarize(env) {
     url:      status.url || '',
     bundle:   status.sharedBundleUrl || '',
     secret:   status.bootstrapSecret || '',
+    backend:  env?.spec?.backendUrl || '',
+    prime:    !!env?.spec?.prime,
     problems: failing.map((c) => `${ c.type }: ${ c.message || c.reason || 'False' }`),
   };
 }

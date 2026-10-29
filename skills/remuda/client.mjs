@@ -133,5 +133,35 @@ export function remudaClient({
 
       return Buffer.from(secret?.data?.password || '', 'base64').toString('utf8');
     },
+
+    /**
+     * Each node's root filesystem on a cluster, from the kubelet's summary.
+     *
+     * Needs `nodes/proxy`, which in practice means an admin token. Anything
+     * that cannot be read is left out, so a token without it gets an empty
+     * answer and no opinion.
+     */
+    async nodeDisk(cluster) {
+      const root = `${ base }/k8s/clusters/${ cluster }/api/v1/nodes`;
+      let names = [];
+
+      try {
+        names = ((await request('GET', root))?.items || []).map((n) => n.metadata?.name).filter(Boolean).slice(0, 10);
+      } catch {
+        return [];
+      }
+
+      const disks = await Promise.all(names.map(async(name) => {
+        try {
+          const fs = (await request('GET', `${ root }/${ name }/proxy/stats/summary`))?.node?.fs;
+
+          return fs ? { name, capacityBytes: Number(fs.capacityBytes) || 0, availableBytes: Number(fs.availableBytes) || 0 } : undefined;
+        } catch {
+          return undefined;
+        }
+      }));
+
+      return disks.filter(Boolean);
+    },
   };
 }

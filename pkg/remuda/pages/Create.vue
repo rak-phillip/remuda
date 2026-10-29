@@ -10,6 +10,8 @@ import AsyncButton from '@shell/components/AsyncButton.vue';
 import AdvancedSection from '@shell/components/AdvancedSection.vue';
 import LabeledInput from '@components/Form/LabeledInput/LabeledInput.vue';
 import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
+import RadioGroup from '@components/Form/Radio/RadioGroup.vue';
+import Checkbox from '@components/Form/Checkbox/Checkbox.vue';
 import { useFormValidation } from '@shell/composables/useFormValidation';
 import type { RuleSet } from '@shell/composables/useFormValidation';
 import { useText } from '../utils/i18n';
@@ -25,6 +27,8 @@ import {
   isIpLiteral, isWildcardFallbackDomain, probeBaseDomain, saveDefaults, wildcardDomainFor,
 } from '../utils/discovery';
 import { isCloneableRepo } from '../utils/validate';
+import { ESTIMATED_DISK_GB, diskShortfall, readNodeDisk } from '../utils/capacity';
+import type { NodeDisk } from '../utils/capacity';
 import { createBranchField } from '../utils/branch-field';
 import { checkRepo, listBranches, parseGitHubRepo, searchBranches } from '../utils/github';
 import type { RepoCheck } from '../utils/github';
@@ -85,6 +89,29 @@ const branch = ref('');
 const gitSecretName = ref('');
 const backendImage = ref('');
 const backendTouched = ref(false);
+
+/**
+ * Whether the environment runs a Rancher of its own, or puts this branch's UI
+ * in front of one that already exists -- an ROA instance, say. The second
+ * builds only the UI and proxies everything else, as `API=<url> yarn dev` does.
+ */
+const backendMode = ref<'own' | 'external'>('own');
+const backendUrl = ref('');
+const prime = ref(false);
+const externalBackend = computed(() => backendMode.value === 'external');
+
+/**
+ * The same shape the CRD accepts: an origin and nothing else. A URL copied
+ * from a browser tab carries /dashboard/..., and proxying to that would look
+ * right and not be.
+ */
+const backendUrlValid = computed(() => /^https?:\/\/[^/?#@\s]+\/?$/.test(backendUrl.value.trim()));
+
+/** The target cluster's nodes' disks, when this user may read them. See utils/capacity.ts. */
+const nodeDisk = ref<NodeDisk[]>([]);
+const diskWarning = computed(() => diskShortfall(
+  nodeDisk.value, externalBackend.value ? ESTIMATED_DISK_GB.externalBackend : ESTIMATED_DISK_GB.ownBackend
+));
 
 /**
  * What GitHub says about the repository, and the branches it offers.
@@ -307,7 +334,8 @@ const pinnedToAddress = computed(() => usesDirect.value && baseDomain.value.ends
  */
 const canSubmit = computed(() => isFormValid.value && !resolvingExposure.value && !controllerBlocked.value && !installingController.value && !!(
   baseDomain.value && ingressClass.value &&
-  !storageUnavailable.value && !entryUnavailable.value
+  !storageUnavailable.value && !entryUnavailable.value &&
+  (!externalBackend.value || backendUrlValid.value)
 ));
 
 // Follow the branch until the user edits the image themselves.
@@ -323,6 +351,17 @@ async function loadDefaults() {
   }
 
   resolvingExposure.value = true;
+
+  // Not awaited with the rest: it is advisory, and a slow kubelet summary must
+  // not hold up the form.
+  const target = clusterId.value;
+
+  nodeDisk.value = [];
+  readNodeDisk(store, target).then((disks) => {
+    if (clusterId.value === target) {
+      nodeDisk.value = disks;
+    }
+  });
 
   try {
     await readDefaults();
@@ -640,6 +679,9 @@ function buildSpec(): RemudaSpec {
 
     nestedPodCidr:     nestedPodCidr.value,
     nestedServiceCidr: nestedServiceCidr.value,
+
+    backendUrl: externalBackend.value ? backendUrl.value.trim().replace(/\/+$/, '') : undefined,
+    prime:      !externalBackend.value && prime.value,
   };
 }
 
@@ -781,6 +823,11 @@ onMounted(async() => {
       v-if="targetsLocal"
       color="warning"
       :label="i18n.t('remuda.warning.localCluster')"
+    />
+    <Banner
+      v-if="diskWarning"
+      color="warning"
+      :label="i18n.t('remuda.warning.lowDisk', diskWarning)"
     />
     <Banner
       v-if="willInstallController"
@@ -944,6 +991,48 @@ onMounted(async() => {
       </div>
     </div>
 
+    <div class="row mb-20">
+      <div class="col span-6">
+        <RadioGroup
+          v-model:value="backendMode"
+          name="backendMode"
+          :label="i18n.t('remuda.create.backendModeLabel')"
+          :options="[
+            { label: i18n.t('remuda.create.backendModeOwn'), value: 'own' },
+            { label: i18n.t('remuda.create.backendModeExternal'), value: 'external' },
+          ]"
+        />
+      </div>
+      <div class="col span-6">
+        <LabeledInput
+          v-if="externalBackend"
+          v-model:value="backendUrl"
+          name="backendUrl"
+          required
+          :label="i18n.t('remuda.create.backendUrlLabel')"
+          :placeholder="i18n.t('remuda.create.backendUrlPlaceholder')"
+          :tooltip="i18n.t('remuda.create.backendUrlHint')"
+        />
+        <p
+          v-if="externalBackend && backendUrl && !backendUrlValid"
+          class="remuda-field-note remuda-field-note--error"
+        >
+          {{ i18n.t('remuda.warning.backendUrlInvalid') }}
+        </p>
+        <Checkbox
+          v-if="!externalBackend"
+          v-model:value="prime"
+          :label="i18n.t('remuda.create.primeLabel')"
+          :tooltip="i18n.t('remuda.create.primeHint')"
+        />
+      </div>
+    </div>
+    <Banner
+      v-if="externalBackend"
+      color="info"
+      :label="i18n.t('remuda.create.externalBackendNotice')"
+    />
+
     <div
       v-if="hostname"
       class="mb-20"
@@ -954,7 +1043,10 @@ onMounted(async() => {
 
     <AdvancedSection>
       <div class="row mb-20">
-        <div class="col span-6">
+        <div
+          v-if="!externalBackend"
+          class="col span-6"
+        >
           <LabeledInput
             v-model:value="backendImage"
             :label="i18n.t('remuda.create.backendLabel')"
@@ -1002,7 +1094,10 @@ onMounted(async() => {
 
       <h3>{{ i18n.t('remuda.create.sizes') }}</h3>
       <div class="row mb-20">
-        <div class="col span-4">
+        <div
+          v-if="!externalBackend"
+          class="col span-4"
+        >
           <LabeledInput
             v-model:value="dataSizeGb"
             type="number"

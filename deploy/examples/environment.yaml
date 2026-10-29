@@ -35,3 +35,27 @@ spec:
   issuerKind: Issuer
   nestedPodCidr: 10.44.0.0/16
   nestedServiceCidr: 10.45.0.0/16
+---
+# Only the UI, in front of a Rancher that already exists -- an ROA instance,
+# say. Everything but the bundle is proxied to it, so log in with its own
+# credentials; there is no bootstrap password.
+apiVersion: remuda.rancher.io/v1alpha1
+kind: Environment
+metadata:
+  name: multi-idp-on-roa
+  namespace: rancher-remuda
+spec:
+  repo: https://github.com/rak-phillip/dashboard
+  branch: task/17295-multi-idp
+  backendUrl: https://prak-6b7be798.ui.rancher.space
+---
+# A backend of its own, running as Rancher Prime.
+apiVersion: remuda.rancher.io/v1alpha1
+kind: Environment
+metadata:
+  name: multi-idp-prime
+  namespace: rancher-remuda
+spec:
+  repo: https://github.com/rak-phillip/dashboard
+  branch: task/17295-multi-idp
+  prime: true

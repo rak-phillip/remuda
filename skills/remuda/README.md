@@ -48,7 +48,8 @@ chmod 600 ~/.config/remuda/config.json
 ```
 
 `RANCHER_URL`, `REMUDA_TOKEN`, `REMUDA_CLUSTER`, `REMUDA_OWNER` and `REMUDA_DRY_RUN=1` override the
-file. A cluster other than `local` also needs the four pins Fleet cannot read back, either as
+file. A cluster other than `local` also needs the four pins Fleet cannot read back (only the first
+two with `--backend-url`, which has no nested cluster), either as
 `PIN_INGRESS_CLASS`, `PIN_STORAGE_CLASS`, `PIN_NESTED_POD_CIDR`, `PIN_NESTED_SERVICE_CIDR` or as a
 `pins` object in the file:
 

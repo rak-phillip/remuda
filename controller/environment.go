@@ -61,6 +61,17 @@ type EnvironmentSpec struct {
 	ClusterID string `json:"clusterId,omitempty"`
 	Owner     string `json:"owner,omitempty"`
 
+	// BackendURL points the environment at a Rancher that already exists --
+	// one provisioned by ROA, say -- instead of running its own. Only the UI is
+	// built and served; everything else is proxied to this origin, the way
+	// `API=<url> yarn dev` does it. See uiProxyConfig.
+	BackendURL string `json:"backendUrl,omitempty"`
+
+	// Prime runs the backend as Rancher Prime. It is the RANCHER_VERSION_TYPE
+	// env var on the same image, not a different one; meaningless with
+	// BackendURL, where the borrowed Rancher already is whatever it is.
+	Prime bool `json:"prime,omitempty"`
+
 	BackendImage  string `json:"backendImage,omitempty"`
 	Hostname      string `json:"hostname,omitempty"`
 	EntryPort     int    `json:"entryPort,omitempty"`
@@ -111,6 +122,12 @@ type EnvironmentStatus struct {
 	// ObservedRebuildRequest is the spec.rebuildRequest that BuildID answers.
 	// Differing from spec is what a rebuild request looks like; see advanceBuild.
 	ObservedRebuildRequest string `json:"observedRebuildRequest,omitempty"`
+
+	// RetiredBuildID is a build whose Job is no longer delivered through Fleet,
+	// because a change to how the controller renders build Jobs can no longer
+	// be applied to it: a Job's pod template is immutable. The build had already
+	// run, and its bundle stays on the ui volume. See retireStuckBuild.
+	RetiredBuildID string `json:"retiredBuildId,omitempty"`
 
 	// Named rather than inlined: the bootstrap password must not be readable to
 	// everyone who can list Environments.

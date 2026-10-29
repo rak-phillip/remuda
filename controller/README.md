@@ -49,6 +49,20 @@ an environment is actually running with rather than only what was asked for.
 environment someone scaled by hand reads as stopped here. That is deliberate: there is no second
 copy of the truth to drift from the first.
 
+### An existing backend, or Prime
+
+`spec.backendUrl` points an environment at a Rancher that already exists, such as an ROA instance,
+instead of running one. Only the UI is built. nginx serves it at the environment's hostname and
+proxies every other path to that Rancher, with the same headers `API=<url> yarn dev` sets. There is
+no backend Deployment, data volume, nested k3s or bootstrap Secret, and `status.bootstrapSecret` is
+empty: the login is that Rancher's own. The value must be an origin alone, such as
+`https://rancher.example.com`. The schema and the controller both refuse a path.
+
+`spec.prime: true` runs the backend as Rancher Prime. It is the same image with
+`RANCHER_VERSION_TYPE=prime`, which is what `/rancherversion` and the backend's Prime-only gates
+read. The schema refuses `prime` together with `backendUrl`, because the borrowed Rancher already is
+whatever it is.
+
 ### Why the CRD lives in `templates/`
 
 Helm installs `crds/` once and never upgrades it. For a schema still at `v1alpha1` that would mean
@@ -169,7 +183,32 @@ Fleet delivers; it does not read back. So nothing here can see the target cluste
 its default StorageClass, or the CIDRs its own k3s uses — and `hostDefaults` describes the *host*,
 which would be a wrong answer rather than a missing one. A downstream Environment therefore has to
 set `ingressClass`, `storageClass`, `nestedPodCidr` and `nestedServiceCidr`, and says so in a
-condition naming exactly which are absent. The extension can see all four and writes them in.
+condition naming exactly which are absent. The extension can see all four and writes them in. An
+environment with `spec.backendUrl` has no nested k3s, so it needs only the first two.
+
+#### When a build Job can no longer be applied
+
+A Job's pod template is immutable, and Fleet re-applies the whole Bundle whenever it changes. So a
+release that renders build Jobs differently leaves every downstream environment built before it with
+a Bundle Fleet can never apply. 0.3.0 did this when it halved the build's CPU request. Fleet reports
+`ErrApplied ... Kind=Job ... field is immutable`, and the environment read `Pending` for good while
+serving normally.
+
+The controller now recognises that error and records the build in `status.retiredBuildId`. From
+then on it leaves that build's Job out of the Bundle. The build has already run, and its output is
+still on the ui volume. The next rebuild names a new Job, which is delivered as normal. Renaming the
+Job instead would apply cleanly, but it would start a build, and every downstream environment would
+rebuild at once on the next upgrade.
+
+#### Recreating under the same name
+
+Bundles are named after their environment, and environments are reconciled before stale Bundles
+are reaped. So an environment deleted and recreated under the same name within one pass used to
+adopt its predecessor's Bundle, relabel it with its own UID, and keep the old release on the far
+side, data volume included. The new environment ran the old Rancher, and its reported password
+returned 401. Now a Bundle labelled with another environment's UID is deleted, and the new one is
+delivered once it is gone. The host-side bootstrap Secret gets the same treatment, so a password is
+never handed out from an environment that no longer exists.
 
 #### What is lost downstream
 

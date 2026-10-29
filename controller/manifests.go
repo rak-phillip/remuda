@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -40,8 +41,18 @@ const (
 	IssuerName          = "remuda-le"
 	IssuerAccountSecret = "remuda-le-account"
 
-	K3sConfigPath = "/etc/rancher/k3s/config.yaml"
+	K3sConfigDir  = "/etc/rancher/k3s"
+	K3sConfigPath = K3sConfigDir + "/config.yaml"
 	NginxConfPath = "/etc/nginx/conf.d/default.conf"
+
+	// Where the proxy config goes instead: the image renders templates into
+	// conf.d at start, filling in the pod's resolver. See uiProxyConfig.
+	NginxTemplatePath = "/etc/nginx/templates/default.conf.template"
+
+	// What rancher/rancher reads to decide whether it is Prime. See
+	// EnvironmentSpec.Prime.
+	PrimeEnvVar   = "RANCHER_VERSION_TYPE"
+	PrimeEnvValue = "prime"
 )
 
 // inotify limits to raise on the node before a backend starts. Counted per-uid
@@ -106,6 +117,12 @@ type renderSpec struct {
 
 	NestedPodCIDR     string
 	NestedServiceCIDR string
+
+	// BackendURL, when set, is an existing Rancher this environment fronts
+	// instead of running its own: scheme and host only, normalised by
+	// resolve(). Everything backend-shaped is left out of the render.
+	BackendURL string
+	Prime      bool
 
 	// Set on every object, so deleting the Environment collects all of them.
 	OwnerRef metav1.OwnerReference
@@ -175,6 +192,48 @@ func (s *renderSpec) SharedBundleURL() string { return s.resourceBase() + "/inde
 // hairpinning through the ingress.
 func (s *renderSpec) dashboardIndexURL() string {
 	return fmt.Sprintf("http://%s-ui.%s.svc.cluster.local/%s/index.html", s.Name, s.Namespace, UIBundlePath)
+}
+
+// ownsBackend is false for an environment pointed at a Rancher that already
+// exists, which brings only the UI and none of what a backend needs.
+func (s *renderSpec) ownsBackend() bool { return s.BackendURL == "" }
+
+// workloadName is the Deployment whose readiness says whether the environment
+// is up: the backend when there is one, the bundle server when that is all
+// there is.
+func (s *renderSpec) workloadName() string {
+	if s.ownsBackend() {
+		return s.Name
+	}
+
+	return s.uiName()
+}
+
+// NormalizeBackendURL reduces an external backend to the origin it is proxied
+// to, refusing anything that is not one.
+//
+// A path is refused rather than dropped: Rancher answers at the root of its
+// host, and a URL copied from a browser tab -- `.../dashboard/home` -- would
+// otherwise proxy somewhere that looks right and is not.
+func NormalizeBackendURL(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("spec.backendUrl: %w", err)
+	}
+
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return "", fmt.Errorf("spec.backendUrl must start with https:// (got %q)", raw)
+	}
+
+	if u.Host == "" {
+		return "", fmt.Errorf("spec.backendUrl names no host (got %q)", raw)
+	}
+
+	if u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.User != nil {
+		return "", fmt.Errorf("spec.backendUrl must be the Rancher's origin alone, e.g. https://rancher.example.com (got %q)", raw)
+	}
+
+	return u.Scheme + "://" + u.Host, nil
 }
 
 func (s *renderSpec) k3sConfigName() string       { return s.Name + "-k3s-config" }
@@ -357,6 +416,13 @@ func (s *renderSpec) k3sConfig() *corev1.ConfigMap {
 // changes. releases.rancher.com serves the *-dev bundles with exactly this
 // header.
 func (s *renderSpec) uiNginxConfig() *corev1.ConfigMap {
+	if !s.ownsBackend() {
+		return &corev1.ConfigMap{
+			ObjectMeta: s.meta(s.uiNginxConfigName(), RoleUI),
+			Data:       map[string]string{"default.conf": s.uiProxyConfig()},
+		}
+	}
+
 	config := strings.Join([]string{
 		"server {",
 		"    listen 80;",
@@ -379,6 +445,111 @@ func (s *renderSpec) uiNginxConfig() *corev1.ConfigMap {
 		ObjectMeta: s.meta(s.uiNginxConfigName(), RoleUI),
 		Data:       map[string]string{"default.conf": config},
 	}
+}
+
+// uiProxyConfig serves the branch's UI in front of a Rancher that already
+// exists, which is what `API=<url> yarn dev` does from a laptop.
+//
+// Everything that is not the UI is proxied rather than listed. The dev server
+// enumerates /v1, /v3, /k8s, /meta and friends, but a path it forgets -- a new
+// /v1-* auth callback, say -- fails there as a 404 from webpack, and fails here
+// as a blank page with nothing to say why. So the UI claims its two paths and
+// the backend gets the rest.
+//
+// The headers are the dev server's (shell/vue-config-helper.js), for the same
+// reasons:
+//
+//   - Host is the backend's, so its ingress routes the request and its
+//     certificate matches the SNI.
+//   - X-API-Host is ours, so the links Rancher writes into API responses point
+//     back here rather than sending the browser to the backend directly.
+//   - Origin is rewritten to the backend's own, but only when the browser sent
+//     one. Rancher refuses a websocket whose Origin is not its own host, and
+//     every watch the UI opens is a websocket.
+//
+// Upstream TLS is not verified, matching the dev server: a Rancher with a
+// self-signed certificate is a normal thing to point this at.
+//
+// The backend is resolved per request rather than once at start. A literal
+// proxy_pass host is looked up when nginx loads its config, and a lookup that
+// fails stops nginx starting at all -- so a backend that is down, or an ROA
+// instance already torn down, would take the bundle down with it. Resolving
+// through a variable needs a resolver address, which nginx will not read from
+// resolv.conf; the image's entrypoint does, when NGINX_ENTRYPOINT_LOCAL_RESOLVERS
+// is set, and substitutes it into this template.
+func (s *renderSpec) uiProxyConfig() string {
+	upstream, _ := url.Parse(s.BackendURL)
+
+	return strings.Join([]string{
+		"# Upgrade only when the client asked to; a plain request must not carry",
+		"# `Connection: upgrade` to the backend.",
+		"map $http_upgrade $remuda_connection {",
+		"    default upgrade;",
+		"    ''      close;",
+		"}",
+		"",
+		"# Rewritten only when present, so a GET with no Origin does not grow one.",
+		"map $http_origin $remuda_origin {",
+		"    default " + s.BackendURL + ";",
+		"    ''      '';",
+		"}",
+		"",
+		"server {",
+		"    listen 80;",
+		"    server_name _;",
+		"    root /usr/share/nginx/html;",
+		"",
+		"    # Relative Location headers: TLS ends at the ingress, so nginx sees",
+		"    # plain HTTP and would otherwise redirect the browser to http://.",
+		"    absolute_redirect off;",
+		"",
+		"    # Chart uploads and large YAML edits go through here.",
+		"    client_max_body_size 0;",
+		"",
+		"    resolver ${NGINX_LOCAL_RESOLVERS} valid=30s;",
+		"    set $remuda_backend " + s.BackendURL + ";",
+		"",
+		"    location /" + UIBundlePath + "/ {",
+		"        # Only on the bundle. The API answers for itself, and a wildcard",
+		"        # CORS header on it would be ours to explain rather than Rancher's.",
+		`        add_header Access-Control-Allow-Origin "*" always;`,
+		"        try_files $uri =404;",
+		"    }",
+		"",
+		"    location = / {",
+		"        return 302 /dashboard/;",
+		"    }",
+		"",
+		"    # The single-page app: every route under /dashboard/ is index.html, which",
+		"    # is what Rancher does when ui-dashboard-index points at a bundle.",
+		"    location /dashboard/ {",
+		`        add_header Cache-Control "no-cache" always;`,
+		"        try_files /" + UIBundlePath + "/index.html =404;",
+		"    }",
+		"",
+		"    location / {",
+		"        proxy_pass $remuda_backend;",
+		"        proxy_http_version 1.1;",
+		"        proxy_set_header Host " + upstream.Host + ";",
+		"        proxy_set_header X-API-Host $host;",
+		"        proxy_set_header X-Forwarded-Proto https;",
+		"        proxy_set_header Origin $remuda_origin;",
+		"        proxy_set_header Upgrade $http_upgrade;",
+		"        proxy_set_header Connection $remuda_connection;",
+		"        proxy_ssl_server_name on;",
+		"        proxy_ssl_name " + upstream.Hostname() + ";",
+		"        proxy_ssl_verify off;",
+		"        # Absolute redirects from the backend stay on this host.",
+		"        proxy_redirect " + s.BackendURL + "/ /;",
+		"        # Watches are long-lived websockets and streams; buffering would",
+		"        # hold events back and the default 60s timeout would cut them.",
+		"        proxy_buffering off;",
+		"        proxy_read_timeout 1h;",
+		"        proxy_send_timeout 1h;",
+		"    }",
+		"}",
+		"",
+	}, "\n")
 }
 
 // inotifyInitContainer raises the node's inotify limits before the backend
@@ -409,6 +580,100 @@ func (s *renderSpec) inotifyInitContainer() corev1.Container {
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("10m"),
 				corev1.ResourceMemory: resource.MustParse("16Mi"),
+			},
+		},
+	}
+}
+
+func (s *renderSpec) backendEnv() []corev1.EnvVar {
+	env := []corev1.EnvVar{
+		{Name: "CATTLE_UI_OFFLINE_PREFERRED", Value: "false"},
+		{Name: "CATTLE_UI_DASHBOARD_INDEX", Value: s.dashboardIndexURL()},
+		{
+			Name: "CATTLE_BOOTSTRAP_PASSWORD",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: s.bootstrapSecretName()},
+					Key:                  "password",
+				},
+			},
+		},
+	}
+
+	// Same image either way: /rancherversion reports RancherPrime from this
+	// variable alone, and the backend's Prime-only gates read it too.
+	if s.Prime {
+		env = append(env, corev1.EnvVar{Name: PrimeEnvVar, Value: PrimeEnvValue})
+	}
+
+	return env
+}
+
+// WebhookWatchdogScript removes rancher-webhook's admission configuration
+// from the nested cluster whenever the webhook has nothing serving it.
+//
+// Without this, an environment whose webhook went away -- evicted under disk
+// pressure on 2026-10-14 -- never starts again. The configuration outlives the
+// pod in the nested etcd with failurePolicy Fail, so the namespace Rancher
+// creates during startup is refused:
+//
+//	[FATAL] failed calling webhook "rancher.cattle.io.namespaces.create-non-kubesystem":
+//	no endpoints available for service "rancher-webhook"
+//
+// Rancher is what would redeploy the webhook, and it dies about 25 seconds in,
+// taking the nested k3s with it. Every container restart repeats that, so the
+// pod crashloops for good.
+//
+// Removing the configuration breaks the loop: Rancher starts, reinstalls the
+// webhook chart, and the webhook registers its configuration again when it
+// comes up. The cost is a few seconds without admission checks on a dev
+// instance, which is a trade worth making. On a healthy start the webhook is
+// briefly unready too, and removing the configuration then is just as
+// harmless.
+func WebhookWatchdogScript() string {
+	return strings.Join([]string{
+		"export KUBECONFIG=" + K3sConfigDir + "/k3s.yaml",
+		"while true; do",
+		"  if [ -f \"$KUBECONFIG\" ] && kubectl get --raw /readyz >/dev/null 2>&1; then",
+		"    ready=\"$(kubectl -n cattle-system get endpoints rancher-webhook -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)\"",
+		"    if [ -z \"$ready\" ]; then",
+		"      for kind in validatingwebhookconfiguration mutatingwebhookconfiguration; do",
+		"        if kubectl get \"$kind\" rancher.cattle.io >/dev/null 2>&1; then",
+		"          kubectl delete \"$kind\" rancher.cattle.io --wait=false >/dev/null 2>&1 &&",
+		"            echo \"$(date -u +%FT%TZ) rancher-webhook has no endpoints; removed $kind rancher.cattle.io so Rancher can start\"",
+		"        fi",
+		"      done",
+		"    fi",
+		"  fi",
+		// Short, because the window is short: the apiserver answers about ten
+		// seconds after k3s starts and Rancher gives up about fifteen later.
+		"  sleep 3",
+		"done",
+	}, "\n")
+}
+
+// webhookWatchdog runs WebhookWatchdogScript beside Rancher. A sidecar rather
+// than anything in the rancher container, because that container is the one
+// that keeps dying; this one outlives every restart of it.
+func (s *renderSpec) webhookWatchdog() corev1.Container {
+	return corev1.Container{
+		Name: "webhook-watchdog",
+		// The backend image, for its kubectl and so it costs no extra pull.
+		Image:           s.BackendImage,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"sh", "-c", WebhookWatchdogScript()},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "k3s-etc", MountPath: K3sConfigDir, ReadOnly: true},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("32Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU: resource.MustParse("200m"),
+				// kubectl here is the k3s multi-call binary, not a slim one.
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 		},
 	}
@@ -445,23 +710,15 @@ func (s *renderSpec) backendDeployment(replicas int32) *appsv1.Deployment {
 							{ContainerPort: 80, Name: "http"},
 							{ContainerPort: 443, Name: "https"},
 						},
-						Env: []corev1.EnvVar{
-							{Name: "CATTLE_UI_OFFLINE_PREFERRED", Value: "false"},
-							{Name: "CATTLE_UI_DASHBOARD_INDEX", Value: s.dashboardIndexURL()},
-							{
-								Name: "CATTLE_BOOTSTRAP_PASSWORD",
-								ValueFrom: &corev1.EnvVarSource{
-									SecretKeyRef: &corev1.SecretKeySelector{
-										LocalObjectReference: corev1.LocalObjectReference{Name: s.bootstrapSecretName()},
-										Key:                  "password",
-									},
-								},
-							},
-						},
+						Env: s.backendEnv(),
 						VolumeMounts: []corev1.VolumeMount{
 							{Name: "data", MountPath: "/var/lib/rancher"},
-							// subPath so k3s keeps a writable /etc/rancher/k3s
-							// to drop its generated kubeconfig into.
+							// k3s writes its kubeconfig here, and the watchdog
+							// reads it -- so an emptyDir both can see, rather
+							// than the container's own filesystem.
+							{Name: "k3s-etc", MountPath: K3sConfigDir},
+							// subPath so the config file lands inside that
+							// directory without shadowing the rest of it.
 							{Name: "k3s-config", MountPath: K3sConfigPath, SubPath: "config.yaml"},
 						},
 						// Without this the pod is Ready the instant the process
@@ -494,8 +751,12 @@ func (s *renderSpec) backendDeployment(replicas int32) *appsv1.Deployment {
 								corev1.ResourceMemory: resource.MustParse("6Gi"),
 							},
 						},
-					}},
+					}, s.webhookWatchdog()},
 					Volumes: []corev1.Volume{
+						{
+							Name:         "k3s-etc",
+							VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+						},
 						{
 							Name: "data",
 							VolumeSource: corev1.VolumeSource{
@@ -520,6 +781,17 @@ func (s *renderSpec) backendDeployment(replicas int32) *appsv1.Deployment {
 func (s *renderSpec) uiDeployment(replicas int32) *appsv1.Deployment {
 	selector := map[string]string{LabelName: s.Name, LabelRole: RoleUI}
 
+	// The proxy config is a template the image renders at start, so it is
+	// mounted where the entrypoint looks for templates rather than over
+	// default.conf -- which the rendering writes. See uiProxyConfig.
+	configPath := NginxConfPath
+	var env []corev1.EnvVar
+
+	if !s.ownsBackend() {
+		configPath = NginxTemplatePath
+		env = []corev1.EnvVar{{Name: "NGINX_ENTRYPOINT_LOCAL_RESOLVERS", Value: "1"}}
+	}
+
 	return &appsv1.Deployment{
 		ObjectMeta: s.meta(s.uiName(), RoleUI),
 		Spec: appsv1.DeploymentSpec{
@@ -532,6 +804,7 @@ func (s *renderSpec) uiDeployment(replicas int32) *appsv1.Deployment {
 					Containers: []corev1.Container{{
 						Name:  "nginx",
 						Image: ServeImage,
+						Env:   env,
 						Ports: []corev1.ContainerPort{{ContainerPort: 80, Name: "http"}},
 						// Building into a directory named for the path means
 						// /ui-bundle/... resolves straight off nginx's root.
@@ -539,7 +812,7 @@ func (s *renderSpec) uiDeployment(replicas int32) *appsv1.Deployment {
 							{Name: "bundle", MountPath: "/usr/share/nginx/html", ReadOnly: true},
 							// subPath so the ConfigMap replaces just
 							// default.conf rather than shadowing conf.d.
-							{Name: "nginx-config", MountPath: NginxConfPath, SubPath: "default.conf", ReadOnly: true},
+							{Name: "nginx-config", MountPath: configPath, SubPath: "default.conf", ReadOnly: true},
 						},
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
@@ -674,6 +947,20 @@ func (s *renderSpec) ingress() *networkingv1.Ingress {
 	meta := s.meta(s.Name, "")
 	meta.Annotations = IssuerAnnotations(s.ClusterIssuer, s.IssuerKind)
 
+	// The bundle path must precede '/', which catches everything else. With an
+	// external backend nginx is the whole environment -- it proxies the rest
+	// itself -- so one path is all there is.
+	paths := []networkingv1.HTTPIngressPath{
+		{Path: "/" + UIBundlePath, PathType: &prefix, Backend: backend(s.uiName())},
+		{Path: "/", PathType: &prefix, Backend: backend(s.Name)},
+	}
+
+	if !s.ownsBackend() {
+		paths = []networkingv1.HTTPIngressPath{
+			{Path: "/", PathType: &prefix, Backend: backend(s.uiName())},
+		}
+	}
+
 	ing := &networkingv1.Ingress{
 		ObjectMeta: meta,
 		Spec: networkingv1.IngressSpec{
@@ -681,14 +968,7 @@ func (s *renderSpec) ingress() *networkingv1.Ingress {
 			Rules: []networkingv1.IngressRule{{
 				Host: s.Hostname,
 				IngressRuleValue: networkingv1.IngressRuleValue{
-					HTTP: &networkingv1.HTTPIngressRuleValue{
-						Paths: []networkingv1.HTTPIngressPath{
-							// The bundle path must precede '/', which catches
-							// everything else.
-							{Path: "/" + UIBundlePath, PathType: &prefix, Backend: backend(s.uiName())},
-							{Path: "/", PathType: &prefix, Backend: backend(s.Name)},
-						},
-					},
+					HTTP: &networkingv1.HTTPIngressRuleValue{Paths: paths},
 				},
 			}},
 		},
@@ -779,6 +1059,22 @@ func (s *renderSpec) buildJob(buildID string) *batchv1.Job {
 				ObjectMeta: metav1.ObjectMeta{Labels: s.labels(RoleBuild)},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
+					// The bundle volume is ReadWriteOnce and the UI pod already
+					// holds it, so the build has to land on the same node. Once
+					// means once per node, not per pod: on local-path, or any
+					// single-node cluster, this always held by accident. On
+					// Longhorn across nodes the build waits forever on an
+					// attach the UI pod never gives up.
+					Affinity: &corev1.Affinity{
+						PodAffinity: &corev1.PodAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+								LabelSelector: &metav1.LabelSelector{
+									MatchLabels: map[string]string{LabelName: s.Name, LabelRole: RoleUI},
+								},
+								TopologyKey: "kubernetes.io/hostname",
+							}},
+						},
+					},
 					Containers: []corev1.Container{{
 						Name:    "build",
 						Image:   BuildImage,
@@ -873,30 +1169,47 @@ type manifest struct {
 // build Job that writes it and the ui Deployment that serves it, and the Issuer
 // before the Ingress annotated for it.
 func desiredObjects(spec *renderSpec, password, buildID string, replicas int32) []manifest {
-	out := []manifest{
-		{GVK: gvk("", "v1", "Secret"), Object: spec.bootstrapSecret(password), Name: spec.bootstrapSecretName()},
-		{GVK: gvk("", "v1", "ConfigMap"), Object: spec.k3sConfig(), Name: spec.k3sConfigName()},
-		{GVK: gvk("", "v1", "ConfigMap"), Object: spec.uiNginxConfig(), Name: spec.uiNginxConfigName()},
+	backend := spec.ownsBackend()
+	out := []manifest{}
+
+	// An external backend brings its own everything: no password to bootstrap,
+	// no nested cluster to configure, no etcd to keep. What is left is the
+	// bundle and the nginx that serves it in front of that Rancher.
+	if backend {
+		out = append(out,
+			manifest{GVK: gvk("", "v1", "Secret"), Object: spec.bootstrapSecret(password), Name: spec.bootstrapSecretName()},
+			manifest{GVK: gvk("", "v1", "ConfigMap"), Object: spec.k3sConfig(), Name: spec.k3sConfigName()},
+		)
 	}
 
-	for _, claim := range []*corev1.PersistentVolumeClaim{
-		spec.pvc("data", spec.DataSizeGB, RoleBackend),
-		spec.pvc("ui", spec.UISizeGB, RoleUI),
-		spec.pvc("cache", spec.CacheSizeGB, RoleBuild),
-	} {
+	out = append(out, manifest{GVK: gvk("", "v1", "ConfigMap"), Object: spec.uiNginxConfig(), Name: spec.uiNginxConfigName()})
+
+	claims := []*corev1.PersistentVolumeClaim{}
+	if backend {
+		claims = append(claims, spec.pvc("data", spec.DataSizeGB, RoleBackend))
+	}
+
+	claims = append(claims, spec.pvc("ui", spec.UISizeGB, RoleUI), spec.pvc("cache", spec.CacheSizeGB, RoleBuild))
+
+	for _, claim := range claims {
 		out = append(out, manifest{
 			GVK: gvk("", "v1", "PersistentVolumeClaim"), Object: claim, Name: claim.Name,
 		})
 	}
 
-	for _, svc := range []*corev1.Service{spec.backendService(), spec.uiService()} {
+	services := []*corev1.Service{spec.uiService()}
+	deployments := []*appsv1.Deployment{spec.uiDeployment(replicas)}
+
+	if backend {
+		services = append([]*corev1.Service{spec.backendService()}, services...)
+		deployments = append([]*appsv1.Deployment{spec.backendDeployment(replicas)}, deployments...)
+	}
+
+	for _, svc := range services {
 		out = append(out, manifest{GVK: gvk("", "v1", "Service"), Object: svc, Name: svc.Name})
 	}
 
-	for _, deployment := range []*appsv1.Deployment{
-		spec.backendDeployment(replicas),
-		spec.uiDeployment(replicas),
-	} {
+	for _, deployment := range deployments {
 		out = append(out, manifest{
 			GVK: gvk("apps", "v1", "Deployment"), Object: deployment, Name: deployment.Name,
 		})
@@ -915,8 +1228,12 @@ func desiredObjects(spec *renderSpec, password, buildID string, replicas int32) 
 		GVK: gvk("networking.k8s.io", "v1", "Ingress"), Object: ingress, Name: ingress.Name,
 	})
 
-	job := spec.buildJob(buildID)
-	out = append(out, manifest{GVK: gvk("batch", "v1", "Job"), Object: job, Name: job.Name})
+	// No build id means no Job to deliver: a retired build, whose Job ran long
+	// ago and can no longer be rewritten. See retireStuckBuild.
+	if buildID != "" {
+		job := spec.buildJob(buildID)
+		out = append(out, manifest{GVK: gvk("batch", "v1", "Job"), Object: job, Name: job.Name})
+	}
 
 	return out
 }

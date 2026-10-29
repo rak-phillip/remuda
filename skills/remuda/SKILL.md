@@ -41,7 +41,33 @@ From a dashboard checkout, with the branch pushed:
 node <skill-dir>/remuda.mjs create            # this checkout's remote and branch
 node <skill-dir>/remuda.mjs create --no-wait  # return as soon as it is accepted
 node <skill-dir>/remuda.mjs create --branch task/17295-multi-idp --repo https://github.com/rak-phillip/dashboard
+node <skill-dir>/remuda.mjs create --prime    # the backend runs as Rancher Prime
+node <skill-dir>/remuda.mjs create --backend-url https://prak-xxxx.ui.rancher.space   # UI only
+node <skill-dir>/remuda.mjs create --print    # show the Environment without creating it
 ```
+
+**Never pass `--help` to find out what a command takes by running it.** `remuda <command> --help`
+is safe now: it prints usage and stops, and an unknown flag is an error. Older copies of this
+script ignored unknown flags, and `create --help` once created an environment from the current
+checkout on a shared cluster. Read the usage from `remuda.mjs` with no arguments, or use
+`create --print`.
+
+**`--backend-url`** puts the branch's UI in front of a Rancher that already exists, such as one the
+user provisioned with ROA, instead of running a new one. Only the UI is built: there is no nested
+cluster, no bootstrap password, and it is ready as soon as the build finishes, in about 5 minutes.
+Tell the user to log in with that Rancher's own credentials. Anything they do through it happens on
+that real Rancher, and external auth providers such as SAML or OIDC will not redirect back, so they
+should use a local user. Give the address alone, with no `/dashboard` path. `--prime` cannot be
+combined with it.
+
+**`--prime`** runs the backend as Rancher Prime. It is the same image with a runtime setting, so it
+costs nothing extra.
+
+**`create` checks the target node's disk** and refuses when the new environment would push the
+roomiest node below 15% free, where Kubernetes starts evicting pods. Environments on that node can
+then stop starting. Do not reach for `--force` on your own. Tell the user which node and how much
+space it has, and point out that stopping an environment frees nothing, because it keeps its
+volumes. Only deleting one does. `doctor` prints each node's free space.
 
 **The branch must be pushed to a remote.** The build pod clones anonymously over HTTPS with no
 credentials, so an unpushed branch — or one only on a private remote — fails in the build Job several
@@ -56,7 +82,8 @@ not ready` throughout that window is the nested cluster still coming up, not a f
 as a failure.
 
 Do not start several environments at once without saying what it costs: a build needs ~5.5 GiB and 4
-CPUs, and one build at a time is comfortable on an 8-CPU node.
+CPUs, and one build at a time is comfortable on an 8-CPU node. Each environment also writes roughly
+8 GB to its node's disk, or 4 GB with `--backend-url`, whatever its volume sizes say.
 
 ## Reading one back
 

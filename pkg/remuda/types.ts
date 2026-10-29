@@ -171,6 +171,22 @@ export interface RemudaSpec {
    */
   nestedPodCidr: string;
   nestedServiceCidr: string;
+
+  /**
+   * An existing Rancher to put this branch's UI in front of, instead of
+   * running a backend of the environment's own -- an ROA instance, say. Its
+   * origin alone, e.g. https://rancher.example.com. Only the UI is built, and
+   * the environment proxies everything else to this Rancher the way
+   * `API=<url> yarn dev` does, so there is no bootstrap password: you log in
+   * with that Rancher's own credentials.
+   */
+  backendUrl?: string;
+  /**
+   * Run the backend as Rancher Prime. The same image with
+   * RANCHER_VERSION_TYPE=prime, so it costs nothing extra. Not allowed with
+   * backendUrl, where the borrowed Rancher already is whatever it is.
+   */
+  prime?: boolean;
 }
 
 /**
@@ -203,6 +219,12 @@ export interface EnvironmentStatus {
   buildId?: string;
   /** The spec.rebuildRequest the current buildId answers. See rebuildPending(). */
   observedRebuildRequest?: string;
+  /**
+   * A build whose Job the controller stopped delivering through Fleet, because
+   * a newer controller renders build Jobs differently and a Job cannot be
+   * changed in place. The bundle it built is still served.
+   */
+  retiredBuildId?: string;
   url?: string;
   sharedBundleUrl?: string;
   bootstrapSecret?: string;

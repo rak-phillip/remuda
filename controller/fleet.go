@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"reflect"
+	"regexp"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -59,6 +60,10 @@ const (
 type observation struct {
 	Build string
 	Run   string
+
+	// ImmutableJobs names build Jobs the delivery could not update in place.
+	// Only Fleet ever reports these; see retireStuckBuild.
+	ImmutableJobs []string
 }
 
 // backend is how an environment's objects get to the cluster they run on.
@@ -194,6 +199,10 @@ func (f *fleetBackend) Apply(ctx context.Context, spec *renderSpec, password, bu
 		return fmt.Errorf("reading the bundle: %w", err)
 	}
 
+	if err := f.releaseEarlierBundle(ctx, current); err != nil {
+		return err
+	}
+
 	// Rewriting an identical Bundle would re-render a BundleDeployment on every
 	// agent every interval, which is the same churn writeStatus() avoids here.
 	//
@@ -230,6 +239,40 @@ func (f *fleetBackend) Apply(ctx context.Context, spec *renderSpec, password, bu
 	log.Printf("%s: updated Bundle %s/%s", spec.Name, f.workspace, bundleName(spec.Name))
 
 	return nil
+}
+
+// releaseEarlierBundle refuses to adopt a Bundle left by an earlier
+// environment of the same name, and removes it instead.
+//
+// Bundles are named after the environment, and environments are reconciled
+// before stale Bundles are reaped. So an environment deleted and recreated
+// under the same name within one pass found its predecessor's Bundle, updated
+// it, and relabelled it with the new UID -- after which the reap never saw it
+// as stale. The downstream release survived the delete, data volume and all:
+// the new environment ran the old Rancher, and the password reported for it
+// returned 401 while the old one still worked. Observed 2026-10-12.
+//
+// Deleting the Bundle uninstalls the old release on the far side. Until it is
+// gone this pass fails with a message saying so, and a later pass creates the
+// new Bundle from nothing.
+func (f *fleetBackend) releaseEarlierBundle(ctx context.Context, current *unstructured.Unstructured) error {
+	owner := current.GetLabels()[LabelEnvironmentUID]
+
+	if owner == "" || owner == f.uid {
+		return nil
+	}
+
+	if current.GetDeletionTimestamp() == nil {
+		err := f.bundles().Delete(ctx, current.GetName(), metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("removing the bundle left by an earlier environment of this name: %w", err)
+		}
+
+		log.Printf("%s/%s: removing the bundle of an earlier environment with this name", f.workspace, current.GetName())
+	}
+
+	return fmt.Errorf("waiting for the bundle of an earlier environment named %s to be removed from %s before delivering this one",
+		current.GetLabels()[LabelName], f.clusterID)
 }
 
 // bundleFor renders an environment into a Fleet Bundle.
@@ -354,6 +397,9 @@ func (f *fleetBackend) Observe(ctx context.Context, spec *renderSpec, running bo
 
 	ready, _, _ := unstructured.NestedInt64(bundle.Object, "status", "summary", "ready")
 	desired, _, _ := unstructured.NestedInt64(bundle.Object, "status", "summary", "desiredReady")
+	nonReady, _, _ := unstructured.NestedSlice(bundle.Object, "status", "summary", "nonReadyResources")
+
+	out.ImmutableJobs = immutableJobsIn(nonReady)
 
 	// Zero desired means the selector matched no cluster: registered with Rancher
 	// but not with Fleet, or still registering. Pending rather than Ready, since
@@ -367,6 +413,28 @@ func (f *fleetBackend) Observe(ctx context.Context, spec *renderSpec, running bo
 	out.Run = RunReady
 
 	return out, nil
+}
+
+// immutableJobPattern is how Fleet reports a Job it could not update because
+// the change touched the pod template. The namespace is matched loosely and the
+// name captured.
+var immutableJobPattern = regexp.MustCompile(`object [^/\s]+/(\S+) batch/v1, Kind=Job: .*field is immutable`)
+
+// immutableJobsIn names the Jobs a Bundle's non-ready resources say could not be
+// updated in place. See retireStuckBuild for why these are worth singling out.
+func immutableJobsIn(nonReady []any) []string {
+	var out []string
+
+	for _, entry := range nonReady {
+		resource, _ := entry.(map[string]any)
+		message, _ := resource["message"].(string)
+
+		if match := immutableJobPattern.FindStringSubmatch(message); match != nil {
+			out = append(out, match[1])
+		}
+	}
+
+	return out
 }
 
 // Release removes the Bundle, which Fleet turns into removing the workload.
