@@ -1,4 +1,26 @@
-import { isCloneableRepo } from '../validate';
+import { MAX_ENVIRONMENT_NAME, isCloneableRepo, isEnvironmentName } from '../validate';
+
+describe('isEnvironmentName', () => {
+  it.each([
+    'my-feature',
+    'dashboard-task-17295-multi-idp',
+    'a',
+    'a'.repeat(MAX_ENVIRONMENT_NAME),
+  ])('accepts %s', (name) => expect(isEnvironmentName(name)).toBe(true));
+
+  it.each([
+    // The one that actually happened: admitted, then Pending forever because the
+    // hop Service cannot be named `mo-2.13-head-hop`.
+    'mo-2.13-head',
+    'My-Feature',
+    '2-13-head',
+    'trailing-',
+    '-leading',
+    'under_score',
+    'a'.repeat(MAX_ENVIRONMENT_NAME + 1),
+    '',
+  ])('rejects %s', (name) => expect(isEnvironmentName(name)).toBe(false));
+});
 
 describe('isCloneableRepo', () => {
   it.each([

@@ -26,7 +26,7 @@ import {
   backendImageForBranch, discoverDefaults, exposureFor, hostIngressDefaults, hostnameFor, ingressEntry,
   isIpLiteral, isWildcardFallbackDomain, probeBaseDomain, saveDefaults, wildcardDomainFor,
 } from '../utils/discovery';
-import { isCloneableRepo } from '../utils/validate';
+import { MAX_ENVIRONMENT_NAME, isCloneableRepo, isEnvironmentName } from '../utils/validate';
 import { ESTIMATED_DISK_GB, diskShortfall, readNodeDisk } from '../utils/capacity';
 import type { NodeDisk } from '../utils/capacity';
 import { createBranchField } from '../utils/branch-field';
@@ -56,7 +56,7 @@ const ruleSets: RuleSet[] = [
     path: 'clusterId', rules: ['required'], translationKey: 'remuda.create.clusterLabel'
   },
   {
-    path: 'name', rules: ['required'], translationKey: 'remuda.create.nameLabel'
+    path: 'name', rules: ['required', 'environmentName'], translationKey: 'remuda.create.nameLabel'
   },
   {
     path: 'repo', rules: ['required', 'cloneable'], translationKey: 'remuda.create.repoLabel'
@@ -76,7 +76,16 @@ const cloneable = (value: any): string | undefined => (
   !value || isCloneableRepo(value) ? undefined : i18n.t('remuda.warning.repoInvalid')
 );
 
-const { getRules, isFormValid } = useFormValidation(i18n.t as any, ruleSets, { cloneable });
+/**
+ * The name becomes a Service name and the front of the build Job's name, so it
+ * is held to the stricter of the two here rather than failing in the controller
+ * after the form is gone. Named for the shell's lookup, like `cloneable`.
+ */
+const environmentName = (value: any): string | undefined => (
+  !value || isEnvironmentName(value) ? undefined : i18n.t('remuda.warning.nameInvalid', { max: MAX_ENVIRONMENT_NAME })
+);
+
+const { getRules, isFormValid } = useFormValidation(i18n.t as any, ruleSets, { cloneable, environmentName });
 
 const loading = ref(true);
 const error = ref('');

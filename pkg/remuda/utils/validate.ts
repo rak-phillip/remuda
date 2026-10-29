@@ -1,4 +1,23 @@
 /**
+ * The longest environment name every derived object can carry: the build Job is
+ * `<name>-build-<10 digit timestamp>`, and a Job name is capped at 63. Matches
+ * MAX_NAME in skills/remuda/env.mjs and the CRD's rule.
+ */
+export const MAX_ENVIRONMENT_NAME = 63 - '-build-'.length - 10;
+
+/**
+ * Whether a name can become every object an environment owns.
+ *
+ * The API server admits any DNS subdomain, dots included, but the name is also
+ * a Service name -- a DNS-1035 label, so no dots and a leading letter. A name
+ * like `mo-2.13-head` used to be accepted here and then sit in Pending forever
+ * with "must not contain dots" on the hop Service.
+ */
+export function isEnvironmentName(name: string): boolean {
+  return (name || '').length <= MAX_ENVIRONMENT_NAME && /^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(name || '');
+}
+
+/**
  * Whether a string looks like something `git clone` could take.
  *
  * Deliberately shape-only: it cannot tell whether a repository exists, and it is

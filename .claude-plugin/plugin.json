@@ -1,7 +1,7 @@
 {
   "name": "remuda",
   "displayName": "Remuda",
-  "version": "0.3.1-rc.1",
+  "version": "0.3.1-rc.2",
   "description": "Create, inspect and tear down Remuda dev environments -- a running Rancher serving a dashboard branch -- from a git checkout. Needs Node 20 or newer.",
   "author": {
     "name": "Phillip Rak"

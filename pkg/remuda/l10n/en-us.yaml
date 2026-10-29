@@ -249,6 +249,10 @@ remuda:
       No cert-manager ClusterIssuer was found on the cluster that terminates TLS
       for this environment, so it will be created without TLS and browsers will
       warn on every visit.
+    nameInvalid: >-
+      Use lowercase letters, digits and dashes, starting with a letter and ending
+      with a letter or digit, {max} characters at most. No dots: the name becomes
+      a Service name, for example my-feature-2-13.
     repoInvalid: >-
       This does not look like a repository the build can clone. It needs the
       repository name as well as the owner, for example
