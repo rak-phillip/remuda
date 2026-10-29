@@ -300,7 +300,8 @@ func TestWebhookWatchdogScript(t *testing.T) {
 		"KUBECONFIG=/etc/rancher/k3s/k3s.yaml",
 		"get endpoints rancher-webhook",
 		"validatingwebhookconfiguration mutatingwebhookconfiguration",
-		`delete "$kind" rancher.cattle.io`,
+		`patch "$kind" rancher.cattle.io --type=json`,
+		`\"value\":\"Ignore\"`,
 		// Acting only once the apiserver answers keeps it quiet while k3s is
 		// still coming up.
 		"get --raw /readyz",
@@ -308,6 +309,12 @@ func TestWebhookWatchdogScript(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Errorf("watchdog script is missing %q", want)
 		}
+	}
+
+	// The configuration is part of the rancher-webhook chart and nothing puts it
+	// back once it is gone; rc.2 deleted it from every new environment.
+	if strings.Contains(script, "delete") {
+		t.Error("the watchdog deletes something; it must only relax failurePolicy")
 	}
 }
 

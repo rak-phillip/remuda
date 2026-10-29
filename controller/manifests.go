@@ -609,8 +609,8 @@ func (s *renderSpec) backendEnv() []corev1.EnvVar {
 	return env
 }
 
-// WebhookWatchdogScript removes rancher-webhook's admission configuration
-// from the nested cluster whenever the webhook has nothing serving it.
+// WebhookWatchdogScript stops rancher-webhook's admission configuration from
+// refusing requests while the webhook has nothing serving it.
 //
 // Without this, an environment whose webhook went away -- evicted under disk
 // pressure on 2026-10-14 -- never starts again. The configuration outlives the
@@ -624,12 +624,18 @@ func (s *renderSpec) backendEnv() []corev1.EnvVar {
 // taking the nested k3s with it. Every container restart repeats that, so the
 // pod crashloops for good.
 //
-// Removing the configuration breaks the loop: Rancher starts, reinstalls the
-// webhook chart, and the webhook registers its configuration again when it
-// comes up. The cost is a few seconds without admission checks on a dev
-// instance, which is a trade worth making. On a healthy start the webhook is
-// briefly unready too, and removing the configuration then is just as
-// harmless.
+// Setting failurePolicy to Ignore breaks the loop: a call that cannot reach the
+// webhook is let through, Rancher starts, and the webhook comes back. Every
+// request it can reach is still checked, so admission behaves as it does on a
+// real Rancher whenever the webhook is up.
+//
+// Deleting the configuration instead, as 0.3.1-rc.2 did, loses it for good.
+// The webhook does not register it; it is part of the rancher-webhook chart,
+// and nothing reinstalls that chart unless its version changes. The webhook is
+// briefly unready on every healthy start too, so rc.2 stripped the
+// configuration from every new environment. Seen on prak-adf9cab4,
+// 2026-10-29. The next chart upgrade puts Fail back, which is harmless: the
+// watchdog sets Ignore again the next time the webhook has no endpoints.
 func WebhookWatchdogScript() string {
 	return strings.Join([]string{
 		"export KUBECONFIG=" + K3sConfigDir + "/k3s.yaml",
@@ -638,10 +644,21 @@ func WebhookWatchdogScript() string {
 		"    ready=\"$(kubectl -n cattle-system get endpoints rancher-webhook -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)\"",
 		"    if [ -z \"$ready\" ]; then",
 		"      for kind in validatingwebhookconfiguration mutatingwebhookconfiguration; do",
-		"        if kubectl get \"$kind\" rancher.cattle.io >/dev/null 2>&1; then",
-		"          kubectl delete \"$kind\" rancher.cattle.io --wait=false >/dev/null 2>&1 &&",
-		"            echo \"$(date -u +%FT%TZ) rancher-webhook has no endpoints; removed $kind rancher.cattle.io so Rancher can start\"",
-		"        fi",
+		"        policies=\"$(kubectl get \"$kind\" rancher.cattle.io -o jsonpath='{.webhooks[*].failurePolicy}' 2>/dev/null)\"",
+		"        case \" $policies \" in *\" Fail \"*)",
+		// One replace per webhook, by index. The API server defaults
+		// failurePolicy on every entry, so there is one word per webhook. A
+		// list that changes in between fails the patch, and the next pass
+		// tries again.
+		"          patch='' i=0",
+		"          for _ in $policies; do",
+		"            patch=\"$patch${patch:+,}{\\\"op\\\":\\\"replace\\\",\\\"path\\\":\\\"/webhooks/$i/failurePolicy\\\",\\\"value\\\":\\\"Ignore\\\"}\"",
+		"            i=$((i + 1))",
+		"          done",
+		"          kubectl patch \"$kind\" rancher.cattle.io --type=json -p \"[$patch]\" >/dev/null 2>&1 &&",
+		"            echo \"$(date -u +%FT%TZ) rancher-webhook has no endpoints; set failurePolicy Ignore on $kind rancher.cattle.io so Rancher can start\"",
+		"          ;;",
+		"        esac",
 		"      done",
 		"    fi",
 		"  fi",
