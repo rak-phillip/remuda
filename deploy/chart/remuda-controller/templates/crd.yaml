@@ -63,6 +63,22 @@ spec:
             A Rancher instance serving a dashboard branch. The object's name is
             the environment's name: it prefixes every object created for it, and
             it is the label the workload is found by.
+          # The API server admits any DNS subdomain as an object name, dots
+          # included, but the name also becomes a Service name (a DNS-1035
+          # label: no dots, starts with a letter) and the front of
+          # `<name>-build-<10 digit timestamp>`, a Job name capped at 63. Without
+          # this, either mistake is admitted and fails later in the controller
+          # as a Provisioned problem nothing can clear but a recreate.
+          x-kubernetes-validations:
+            - rule: 'self.metadata.name.matches("^[a-z]([-a-z0-9]*[a-z0-9])?$")'
+              message: >-
+                name must be lowercase letters, digits and dashes, start with a
+                letter and end with a letter or digit -- no dots, because it
+                becomes a Service name.
+            - rule: 'size(self.metadata.name) <= 46'
+              message: >-
+                name must be 46 characters or fewer, because it prefixes the
+                build Job's name, which is capped at 63.
           properties:
             spec:
               type: object

@@ -52,9 +52,9 @@ export function detectAgent(env = {}) {
  * The longest environment name whose build Job still has a legal name.
  *
  * The controller names that Job `<environment>-build-<10-digit id>` and a Job
- * name is capped at 63 characters. The API server knows none of that about an
- * Environment -- a 47-character name is admitted and fails later, when the Job
- * is created -- so every client has to cap it for itself.
+ * name is capped at 63 characters. The CRD now rejects a longer name, but only
+ * once the chart carrying that rule is installed, and the error then comes from
+ * the API server rather than here -- so this still caps it before asking.
  */
 export const MAX_NAME = 63 - '-build-'.length - 10;
 
