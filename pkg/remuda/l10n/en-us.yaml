@@ -207,6 +207,7 @@ remuda:
       The management cluster is not in the path for this environment: its
       hostname resolves to its own cluster's ingress, which serves it directly.
     buildLogHint: Build logs are on the build job's pod in the target cluster.
+    assetBase: Asset base
     peek: Debug proxy
 
   confirmDelete:

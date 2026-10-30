@@ -428,7 +428,7 @@ onUnmounted(() => clearInterval(timer));
           </dd>
         </template>
 
-        <dt>Asset base</dt>
+        <dt>{{ i18n.t('remuda.detail.assetBase') }}</dt>
         <dd><code>{{ assetBase }}</code></dd>
 
         <dt>{{ i18n.t('remuda.detail.peek') }}</dt>
@@ -607,9 +607,16 @@ onUnmounted(() => clearInterval(timer));
 
 <style lang="scss" scoped>
 .remuda-facts {
+  // A column sized to its content would size each list on its own, and the
+  // values of one section would not line up with the next.
+  --remuda-label-width: 170px;
+
+  // Baseline, not start: a <code> value is a padded box, so its text sits lower
+  // than a label that starts at the top of the same row.
+  align-items: baseline;
   display: grid;
   gap: 8px 20px;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: var(--remuda-label-width) minmax(0, 1fr);
   margin-bottom: 20px;
 
   dt {
@@ -618,7 +625,16 @@ onUnmounted(() => clearInterval(timer));
 
   dd {
     margin: 0;
+    min-width: 0;
   }
+
+  code {
+    overflow-wrap: anywhere;
+  }
+}
+
+h3 {
+  margin-top: 20px;
 }
 
 .remuda-actions {
