@@ -80,6 +80,7 @@ export const LABEL_ENTRY_PORT = 'remuda.rancher.io/entry-port';
  */
 export const LABEL_ADDRESSES_PINNED = 'remuda.rancher.io/hop-addresses-pinned';
 
+export const ROLE_BACKEND = 'backend';
 export const ROLE_UI = 'ui';
 export const ROLE_BUILD = 'build';
 /** Not an environment's -- the DNS probe belongs to a cluster, not a workload. */

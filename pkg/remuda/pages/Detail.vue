@@ -20,6 +20,8 @@ import {
   crIncomplete, crRunState, deleteRecord, findEnvironment, rebuildPending, rebuildRecord, setRecordRunning
 } from '../utils/environments';
 import { stateColor } from '../utils/table';
+import { openLogs } from '../utils/logs';
+import type { LogSource } from '../utils/logs';
 import { environmentUrl, resourceBase, servesTrustedCertificate, sharedDashboardIndexUrl } from '../utils/manifests';
 import {
   BLANK_CLUSTER, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME, PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
@@ -304,6 +306,16 @@ async function remove(cb: (ok: boolean) => void) {
   }
 }
 
+async function viewLogs(source: LogSource) {
+  try {
+    if (!await openLogs(store, clusterId, spec.value as RemudaSpec, source)) {
+      error.value = i18n.t('remuda.detail.noLogs');
+    }
+  } catch (e: any) {
+    error.value = e?.message || i18n.t('remuda.detail.noLogs');
+  }
+}
+
 const listRoute = { name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } };
 
 const titleBadge = computed(() => {
@@ -500,6 +512,14 @@ onUnmounted(() => clearInterval(timer));
             :color="stateColor(runState)"
             :label="i18n.t(`remuda.state.${runState}`)"
           />
+          <RcButton
+            v-if="!externalBackend"
+            variant="link"
+            size="small"
+            @click="viewLogs('backend')"
+          >
+            {{ i18n.t('remuda.detail.viewLogs') }}
+          </RcButton>
         </dd>
 
         <dt>{{ i18n.t('remuda.list.columns.build') }}</dt>
@@ -508,6 +528,13 @@ onUnmounted(() => clearInterval(timer));
             :color="stateColor(buildState)"
             :label="i18n.t(`remuda.state.${buildState}`)"
           />
+          <RcButton
+            variant="link"
+            size="small"
+            @click="viewLogs('build')"
+          >
+            {{ i18n.t('remuda.detail.viewLogs') }}
+          </RcButton>
         </dd>
       </dl>
 
@@ -614,9 +641,6 @@ onUnmounted(() => clearInterval(timer));
         </p>
       </template>
 
-      <p class="text-muted">
-        {{ i18n.t('remuda.detail.buildLogHint') }}
-      </p>
 
       <ConfirmDelete
         ref="confirmDelete"
