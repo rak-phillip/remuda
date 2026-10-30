@@ -4,6 +4,8 @@ import { useStore } from 'vuex';
 import { useRoute, useRouter } from 'vue-router';
 import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
+import { BadgeState } from '@components/BadgeState';
+import TitleBar from '@shell/components/Resource/Detail/TitleBar/index.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
 import RcButton from '@components/RcButton/RcButton.vue';
 import { RcDropdown, RcDropdownItem, RcDropdownTrigger } from '@components/RcDropdown';
@@ -17,6 +19,7 @@ import { EXTENSION_VERSION } from '../utils/controller';
 import {
   crIncomplete, crRunState, deleteRecord, findEnvironment, rebuildPending, rebuildRecord, setRecordRunning
 } from '../utils/environments';
+import { stateColor } from '../utils/table';
 import { environmentUrl, resourceBase, servesTrustedCertificate, sharedDashboardIndexUrl } from '../utils/manifests';
 import {
   BLANK_CLUSTER, ENDPOINTS, HOST_CLUSTER_ID, LABEL_NAME, PRODUCT_NAME, WILDCARD_DNS_SUFFIX,
@@ -294,12 +297,20 @@ async function remove(cb: (ok: boolean) => void) {
   try {
     await deleteRecord(store, clusterId, record.value as EnvironmentRecord);
     cb(true);
-    router.push({ name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } });
+    router.push(listRoute);
   } catch (e: any) {
     error.value = e?.message || i18n.t('remuda.error.deleteFailed');
     cb(false);
   }
 }
+
+const listRoute = { name: `${ PRODUCT_NAME }-c-cluster-environments`, params: { cluster: BLANK_CLUSTER } };
+
+const titleBadge = computed(() => {
+  const state = incomplete.value ? 'incomplete' : runState.value;
+
+  return { color: stateColor(state) as any, label: i18n.t(`remuda.state.${ state }`) };
+});
 
 const copy = (value: string) => navigator.clipboard?.writeText(value);
 
@@ -314,7 +325,91 @@ onUnmounted(() => clearInterval(timer));
 <template>
   <Loading v-if="loading" />
   <div v-else>
-    <h1>{{ envName }}</h1>
+    <TitleBar
+      :resource="spec || {}"
+      :resource-type-label="i18n.t('remuda.detail.title')"
+      :resource-name="envName"
+      :resource-to="listRoute"
+      :badge="spec ? titleBadge : undefined"
+      :description="spec && !externalBackend ? i18n.t('remuda.detail.isolated') : undefined"
+    >
+      <template
+        v-if="spec"
+        #additional-actions
+      >
+        <div class="remuda-actions">
+          <!--
+            Ordered as Rancher's masthead orders them: the actions, then overflow
+            at the right edge.
+
+            Stop sits beside Delete, so an unexplained verb reads as destructive.
+            The promise it makes is the same one `stopped` makes afterwards; saying
+            it here is what lets someone decide rather than find out.
+          -->
+          <span
+            v-if="runState === 'ready' || runState === 'pending'"
+            v-clean-tooltip="i18n.t('remuda.detail.stopHint')"
+          >
+            <AsyncButton
+              mode="apply"
+              action-color="role-secondary"
+              :action-label="i18n.t('remuda.detail.stop')"
+              :waiting-label="i18n.t('remuda.detail.stopping')"
+              :success-label="i18n.t('remuda.detail.stop')"
+              @click="stop"
+            />
+          </span>
+          <!--
+            A start issued while the old pod is still terminating produces one
+            stuck Pending on a RWO volume that is still attached, so `stopping`
+            offers the button and refuses it rather than hiding it.
+          -->
+          <AsyncButton
+            v-else
+            mode="apply"
+            action-color="role-secondary"
+            :action-label="i18n.t('remuda.detail.start')"
+            :waiting-label="i18n.t('remuda.detail.starting')"
+            :success-label="i18n.t('remuda.detail.start')"
+            :disabled="runState === 'stopping'"
+            @click="start"
+          />
+
+          <AsyncButton
+            mode="apply"
+            :action-label="i18n.t('remuda.detail.rebuild')"
+            :waiting-label="i18n.t('remuda.detail.rebuilding')"
+            :success-label="i18n.t('remuda.detail.rebuild')"
+            @click="rebuild"
+          />
+          <RcDropdown>
+            <RcDropdownTrigger
+              variant="tertiary"
+              :aria-label="i18n.t('remuda.detail.moreActions')"
+            >
+              <i class="icon icon-actions" />
+            </RcDropdownTrigger>
+            <template #dropdownCollection>
+              <RcDropdownItem
+                v-if="hop"
+                @click="resyncFromMenu"
+              >
+                {{ i18n.t('remuda.detail.resync') }}
+              </RcDropdownItem>
+              <!--
+                Delete keeps its confirmation rather than gaining weight from
+                being a button: the modal is what makes it deliberate, and it was
+                never really asynchronous here -- the old AsyncButton reported
+                success immediately and then opened the dialog.
+              -->
+              <RcDropdownItem @click="confirmDelete?.show()">
+                {{ i18n.t('remuda.detail.delete') }}
+              </RcDropdownItem>
+            </template>
+          </RcDropdown>
+        </div>
+      </template>
+    </TitleBar>
     <Banner
       v-if="error"
       color="error"
@@ -343,12 +438,6 @@ onUnmounted(() => clearInterval(timer));
         color="warning"
         :label="i18n.t('remuda.detail.externalBackend', { backend: spec.backendUrl })"
       />
-      <p
-        v-else
-        class="text-muted"
-      >
-        {{ i18n.t('remuda.detail.isolated') }}
-      </p>
 
       <h3>{{ i18n.t('remuda.detail.access') }}</h3>
       <dl class="remuda-facts">
@@ -406,10 +495,20 @@ onUnmounted(() => clearInterval(timer));
         </template>
 
         <dt>{{ i18n.t('remuda.list.columns.backend') }}</dt>
-        <dd>{{ i18n.t(`remuda.state.${runState}`) }}</dd>
+        <dd>
+          <BadgeState
+            :color="stateColor(runState)"
+            :label="i18n.t(`remuda.state.${runState}`)"
+          />
+        </dd>
 
         <dt>{{ i18n.t('remuda.list.columns.build') }}</dt>
-        <dd>{{ i18n.t(`remuda.state.${buildState}`) }}</dd>
+        <dd>
+          <BadgeState
+            :color="stateColor(buildState)"
+            :label="i18n.t(`remuda.state.${buildState}`)"
+          />
+        </dd>
       </dl>
 
       <h3>{{ i18n.t('remuda.detail.source') }}</h3>
@@ -519,83 +618,6 @@ onUnmounted(() => clearInterval(timer));
         {{ i18n.t('remuda.detail.buildLogHint') }}
       </p>
 
-      <!--
-        Stop sits beside Delete, so an unexplained verb reads as destructive.
-        The promise it makes is the same one `stopped` makes afterwards; saying
-        it here is what lets someone decide rather than find out.
-      -->
-      <p
-        v-if="runState === 'ready' || runState === 'pending'"
-        class="text-muted"
-      >
-        {{ i18n.t('remuda.detail.stopHint') }}
-      </p>
-
-      <div class="remuda-actions">
-        <!--
-          Ordered left to right as overflow, secondary, primary, so the primary
-          action lands closest to the right edge the row is aligned to.
-        -->
-        <RcDropdown>
-          <RcDropdownTrigger
-            variant="tertiary"
-            :aria-label="i18n.t('remuda.detail.moreActions')"
-          >
-            <i class="icon icon-actions" />
-          </RcDropdownTrigger>
-          <template #dropdownCollection>
-            <RcDropdownItem
-              v-if="hop"
-              @click="resyncFromMenu"
-            >
-              {{ i18n.t('remuda.detail.resync') }}
-            </RcDropdownItem>
-            <!--
-              Delete keeps its confirmation rather than gaining weight from
-              being a button: the modal is what makes it deliberate, and it was
-              never really asynchronous here -- the old AsyncButton reported
-              success immediately and then opened the dialog.
-            -->
-            <RcDropdownItem @click="confirmDelete?.show()">
-              {{ i18n.t('remuda.detail.delete') }}
-            </RcDropdownItem>
-          </template>
-        </RcDropdown>
-
-        <AsyncButton
-          v-if="runState === 'ready' || runState === 'pending'"
-          mode="apply"
-          action-color="role-secondary"
-          :action-label="i18n.t('remuda.detail.stop')"
-          :waiting-label="i18n.t('remuda.detail.stopping')"
-          :success-label="i18n.t('remuda.detail.stop')"
-          @click="stop"
-        />
-        <!--
-          A start issued while the old pod is still terminating produces one
-          stuck Pending on a RWO volume that is still attached, so `stopping`
-          offers the button and refuses it rather than hiding it.
-        -->
-        <AsyncButton
-          v-else
-          mode="apply"
-          action-color="role-secondary"
-          :action-label="i18n.t('remuda.detail.start')"
-          :waiting-label="i18n.t('remuda.detail.starting')"
-          :success-label="i18n.t('remuda.detail.start')"
-          :disabled="runState === 'stopping'"
-          @click="start"
-        />
-
-        <AsyncButton
-          mode="apply"
-          :action-label="i18n.t('remuda.detail.rebuild')"
-          :waiting-label="i18n.t('remuda.detail.rebuilding')"
-          :success-label="i18n.t('remuda.detail.rebuild')"
-          @click="rebuild"
-        />
-      </div>
-
       <ConfirmDelete
         ref="confirmDelete"
         :name="spec.name"
@@ -642,6 +664,5 @@ h3 {
   justify-content: flex-end;
   align-items: center;
   gap: 10px;
-  margin-top: 20px;
 }
 </style>
