@@ -397,6 +397,7 @@ onUnmounted(() => clearInterval(timer));
           <RcDropdown>
             <RcDropdownTrigger
               variant="tertiary"
+              size="large"
               :aria-label="i18n.t('remuda.detail.moreActions')"
             >
               <i class="icon icon-actions" />
