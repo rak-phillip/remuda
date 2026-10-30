@@ -180,6 +180,17 @@ jobs:
       - run: yarn install --frozen-lockfile
         working-directory: ./source
 
+      # publish-pkgs refuses `-b gh-pages` unless that ref exists where it runs,
+      # and this checkout holds only the tag. It never looks at any other pages
+      # branch, so a candidate cannot catch this: only a production release can.
+      - name: Fetch the pages branch for publish-pkgs
+        working-directory: ./source
+        run: |
+          set -euo pipefail
+
+          branch='${{ needs.version.outputs.pages_branch }}'
+          git fetch --depth=1 origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+
       - name: Build and package the extension
         working-directory: ./source
         run: |
