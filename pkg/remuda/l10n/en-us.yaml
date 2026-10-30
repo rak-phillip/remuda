@@ -87,11 +87,10 @@ remuda:
       The Rancher to put this branch's UI in front of, such as an ROA instance.
       Its address alone, without /dashboard or any other path.
     externalBackendNotice: >-
-      Only this branch's UI is built. The environment serves it at its own
-      address and passes everything else to the existing Rancher, which is left
-      unchanged. Log in with that Rancher's own credentials. External auth
-      providers such as SAML or OIDC redirect back to that Rancher's own
-      address rather than to this one, so use a local user.
+      Only this branch's UI is built. Everything else is passed to that Rancher,
+      which is left unchanged. Log in with its own credentials as a local user:
+      SAML, OIDC and other external providers redirect to its address, not this
+      one.
     primeLabel: Rancher Prime
     primeHint: >-
       Runs the backend as Rancher Prime, so Prime-only UI and backend features
@@ -111,10 +110,9 @@ remuda:
     storageClass: Storage class
     clusterIssuer: cert-manager ClusterIssuer
     issuerMirrored: >-
-      This cluster has no ClusterIssuer, so Remuda will create its own
-      cert-manager Issuer in the rancher-remuda namespace, copying the Let's
-      Encrypt settings from {source}. That registers a new ACME account against
-      the same email address. No other setup is needed.
+      The certificate comes from a new cert-manager Issuer in the rancher-remuda
+      namespace, copying the Let's Encrypt settings from {source}. That registers
+      a new ACME account against the same email address.
     controllerNotice: >-
       First run on this Rancher: creating this environment also installs the
       Remuda controller ({version}), which is what builds it. This happens once.
@@ -238,9 +236,9 @@ remuda:
       remuda-controller chart is not in any Helm repository on this Rancher. Add
       the repository you installed Remuda from under Apps -> Repositories.
     localCluster: >-
-      This targets the local management cluster, which already runs this Rancher.
-      A dev environment here competes for the same node's CPU, memory and disk.
-      Prefer a downstream cluster where one is available.
+      This is the management cluster: the environment competes with this Rancher
+      for the node's CPU, memory and disk. Prefer a downstream cluster where one
+      is available.
     noStorageClass: >-
       This cluster has no StorageClass, so the environment's volumes can never be
       bound and the build will not start. Install node-local storage here, or
@@ -279,14 +277,12 @@ remuda:
       put anything sensitive in it.
     directExposure: >-
       {reason} This environment will instead be reached directly on its own
-      cluster's ingress, at {hostname}.
+      cluster's ingress.
     directWildcard: >-
-      That name comes from {suffix}, a public DNS service that resolves any
-      address embedded in a name, so nothing has to be registered for it to
-      work. The address is part of the hostname and is baked into the UI bundle
-      when it is built, so replacing the cluster's node ({address}) means
-      recreating the environment. Set a base domain of your own below to use a
-      name you control instead.
+      {suffix} resolves this name with no DNS to set up, but the address is part
+      of the hostname and baked into the UI bundle, so replacing the node
+      ({address}) means recreating the environment. Set a base domain under Show
+      Advanced to use a name you control.
     directIsPublic: >-
       This environment answers on its cluster's public address ({address}), so it
       is reachable from the internet by anyone who knows the name. Treat it as
@@ -304,11 +300,9 @@ remuda:
       wildcard DNS record for *.{derived} pointing at this cluster's ingress, or
       set a base domain of your own below.
     wildcardMissing: >-
-      Nothing resolves under {derived}, so an environment named beneath it would
-      be unreachable and its certificate would never issue. Using {baseDomain}
-      instead, which resolves to this cluster's ingress with no DNS to set up.
-      Add a wildcard record for *.{derived} pointing at that ingress and this
-      field goes back to using it.
+      Nothing resolves under {derived}, so using {baseDomain}, which reaches this
+      cluster's ingress with no DNS to set up. Add a wildcard record for
+      *.{derived} pointing at that ingress and the base domain goes back to it.
 
   reason:
     noHostIngress: >-
