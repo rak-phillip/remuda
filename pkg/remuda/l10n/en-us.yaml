@@ -15,9 +15,7 @@ remuda:
     createAction: Create
     delete: Delete
     start: Start
-    starting: Starting
     stop: Stop
-    stopping: Stopping
     incompleteHint: >-
       An environment below was recorded but never finished being created, so
       nothing is running for it. Delete it and create it again; the name stays
