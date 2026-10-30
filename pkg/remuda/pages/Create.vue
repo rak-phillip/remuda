@@ -208,6 +208,9 @@ const clusterOptions = computed(() => clusters.value.map((c) => ({ label: c.name
 const targetsLocal = computed(() => clusters.value.find((c) => c.id === clusterId.value)?.isLocal);
 const hostname = computed(() => (name.value && baseDomain.value ? hostnameFor(name.value, baseDomain.value) : ''));
 
+/** Shown before a name is typed too, because the notes beneath it describe this domain. */
+const previewHostname = computed(() => (baseDomain.value ? hostnameFor(name.value || i18n.t('remuda.create.namePlaceholder'), baseDomain.value) : ''));
+
 /**
  * No StorageClass means none of the three PVCs can ever bind, so the build pod
  * never schedules and the environment fails several minutes in with "pod has
@@ -232,7 +235,7 @@ const exposure = computed(() => exposureFor({
 const usesDirect = computed(() => exposure.value.mode === 'direct');
 const usesHop = computed(() => exposure.value.mode === 'hop');
 
-/** Named in the banner that explains the fallback, so the two cannot drift. */
+/** Named in the note that explains the fallback, so the two cannot drift. */
 const wildcardSuffix = WILDCARD_DNS_SUFFIX;
 
 /**
@@ -319,7 +322,7 @@ const branchStatus = computed(() => {
  */
 const publicEntry = computed(() => targetEntry.value?.addressType === 'ExternalIP');
 
-/** Where a direct environment will answer, for the banner that explains why. */
+/** Where a direct environment will answer, for the notes that explain why. */
 const entryAddress = computed(() => targetEntry.value?.addresses?.join(', ') || '');
 
 /**
@@ -329,6 +332,29 @@ const entryAddress = computed(() => targetEntry.value?.addresses?.join(', ') || 
  * any other, so saying otherwise would be wrong.
  */
 const pinnedToAddress = computed(() => usesDirect.value && baseDomain.value.endsWith(WILDCARD_DNS_SUFFIX));
+
+/** What decided the address and certificate shown under Hostname, in that order. */
+const addressNotes = computed(() => {
+  const notes: string[] = [];
+
+  if (usesDirect.value && !entryUnavailable.value && !resolvingExposure.value) {
+    notes.push(i18n.t('remuda.warning.directExposure', { reason: i18n.t(`remuda.reason.${ exposure.value.reason }`) }));
+
+    if (pinnedToAddress.value) {
+      notes.push(i18n.t('remuda.warning.directWildcard', { suffix: wildcardSuffix, address: entryAddress.value }));
+    }
+  }
+
+  if (wildcardChecked.value && wildcardMissing.value && !wildcardNoAddress.value) {
+    notes.push(i18n.t('remuda.warning.wildcardMissing', { derived: derivedBaseDomain.value, baseDomain: baseDomain.value }));
+  }
+
+  if (mirrorsIssuer.value) {
+    notes.push(i18n.t('remuda.create.issuerMirrored', { source: effectiveAcme.value?.source }));
+  }
+
+  return notes;
+});
 
 /**
  * Two separate things gate the button. `isFormValid` covers the fields the user
@@ -823,15 +849,14 @@ onMounted(async() => {
   <div v-else>
     <h1>{{ i18n.t('remuda.create.title') }}</h1>
 
+    <!--
+      Banners are for what stops this working or puts it at risk. What is merely
+      worth knowing sits as a note beside the field it describes.
+    -->
     <Banner
       v-if="error"
       color="error"
       :label="error"
-    />
-    <Banner
-      v-if="targetsLocal"
-      color="warning"
-      :label="i18n.t('remuda.warning.localCluster')"
     />
     <Banner
       v-if="diskWarning"
@@ -839,12 +864,7 @@ onMounted(async() => {
       :label="i18n.t('remuda.warning.lowDisk', diskWarning)"
     />
     <Banner
-      v-if="willInstallController"
-      color="info"
-      :label="i18n.t('remuda.create.controllerNotice', { version: controllerChart?.version })"
-    />
-    <Banner
-      v-else-if="controllerBlocked"
+      v-if="controllerBlocked"
       color="error"
       :label="i18n.t(controllerChart ? 'remuda.warning.controllerForbidden' : 'remuda.warning.controllerNoChart')"
     />
@@ -865,11 +885,6 @@ onMounted(async() => {
       </div>
     </Banner>
     <Banner
-      v-if="mirrorsIssuer"
-      color="info"
-      :label="i18n.t('remuda.create.issuerMirrored', { source: effectiveAcme?.source })"
-    />
-    <Banner
       v-if="!effectiveIssuer"
       color="warning"
       :label="i18n.t('remuda.warning.noIssuer')"
@@ -884,20 +899,6 @@ onMounted(async() => {
       color="error"
       :label="i18n.t('remuda.warning.noIngressEntry')"
     />
-    <template v-if="usesDirect && !entryUnavailable && !resolvingExposure">
-      <Banner
-        color="info"
-        :label="i18n.t('remuda.warning.directExposure', {
-          reason: i18n.t(`remuda.reason.${ exposure.reason }`),
-          hostname,
-        })"
-      />
-      <Banner
-        v-if="pinnedToAddress"
-        color="warning"
-        :label="i18n.t('remuda.warning.directWildcard', { suffix: wildcardSuffix, address: entryAddress })"
-      />
-    </template>
     <Banner
       v-if="publicEntry"
       color="warning"
@@ -918,11 +919,6 @@ onMounted(async() => {
       color="warning"
       :label="i18n.t('remuda.warning.wildcardNoAddress', { derived: derivedBaseDomain })"
     />
-    <Banner
-      v-else-if="wildcardChecked && wildcardMissing"
-      color="info"
-      :label="i18n.t('remuda.warning.wildcardMissing', { derived: derivedBaseDomain, baseDomain })"
-    />
 
     <div class="row mb-20">
       <div class="col span-6">
@@ -933,6 +929,12 @@ onMounted(async() => {
           :label="i18n.t('remuda.create.clusterLabel')"
           :options="clusterOptions"
         />
+        <p
+          v-if="targetsLocal"
+          class="remuda-field-note remuda-field-note--warning"
+        >
+          {{ i18n.t('remuda.warning.localCluster') }}
+        </p>
       </div>
       <div class="col span-6">
         <LabeledInput
@@ -1028,6 +1030,12 @@ onMounted(async() => {
         >
           {{ i18n.t('remuda.warning.backendUrlInvalid') }}
         </p>
+        <p
+          v-if="externalBackend"
+          class="remuda-field-note"
+        >
+          {{ i18n.t('remuda.create.externalBackendNotice') }}
+        </p>
         <Checkbox
           v-if="!externalBackend"
           v-model:value="prime"
@@ -1036,18 +1044,19 @@ onMounted(async() => {
         />
       </div>
     </div>
-    <Banner
-      v-if="externalBackend"
-      color="info"
-      :label="i18n.t('remuda.create.externalBackendNotice')"
-    />
 
-    <div
-      v-if="hostname"
-      class="mb-20"
-    >
-      <label>{{ i18n.t('remuda.create.hostnameLabel') }}</label>
-      <div><code>https://{{ hostname }}</code></div>
+    <div class="mb-20">
+      <template v-if="previewHostname">
+        <label>{{ i18n.t('remuda.create.hostnameLabel') }}</label>
+        <div><code>https://{{ previewHostname }}</code></div>
+      </template>
+      <p
+        v-for="note in addressNotes"
+        :key="note"
+        class="remuda-field-note"
+      >
+        {{ note }}
+      </p>
     </div>
 
     <AdvancedSection>
@@ -1131,6 +1140,12 @@ onMounted(async() => {
     </AdvancedSection>
 
     <div class="remuda-footer">
+      <p
+        v-if="willInstallController"
+        class="remuda-field-note"
+      >
+        {{ i18n.t('remuda.create.controllerNotice', { version: controllerChart?.version }) }}
+      </p>
       <AsyncButton
         mode="create"
         :disabled="!canSubmit"
@@ -1154,6 +1169,10 @@ h3 {
   &--error {
     color: var(--error);
   }
+
+  &--warning {
+    color: var(--warning);
+  }
 }
 
 .remuda-banner {
@@ -1166,8 +1185,14 @@ h3 {
 // Matches the other create forms: the action sits right, at its natural width,
 // rather than stretching the full width of the page.
 .remuda-footer {
+  align-items: center;
   display: flex;
+  gap: 16px;
   justify-content: flex-end;
   margin-top: 20px;
+
+  .remuda-field-note {
+    margin: 0;
+  }
 }
 </style>
