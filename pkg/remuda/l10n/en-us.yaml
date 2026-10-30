@@ -15,9 +15,7 @@ remuda:
     createAction: Create
     delete: Delete
     start: Start
-    starting: Starting
     stop: Stop
-    stopping: Stopping
     incompleteHint: >-
       An environment below was recorded but never finished being created, so
       nothing is running for it. Delete it and create it again; the name stays
@@ -206,7 +204,9 @@ remuda:
     directHint: >-
       The management cluster is not in the path for this environment: its
       hostname resolves to its own cluster's ingress, which serves it directly.
-    buildLogHint: Build logs are on the build job's pod in the target cluster.
+    viewLogs: View logs
+    noLogs: There is no pod to read logs from. A build's pod is removed once a newer build replaces it.
+    assetBase: Asset base
     peek: Debug proxy
 
   confirmDelete:
